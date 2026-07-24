@@ -1,0 +1,6 @@
+build/
+*.elf
+*.dol
+*.o
+*.d
+protocol_mock_test
