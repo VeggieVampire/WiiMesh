@@ -6,9 +6,10 @@
 
 namespace wiimesh {
 
-constexpr const char *AppVersion = "0.1.31";
+constexpr const char *AppVersion = "0.1.51";
 constexpr uint32_t BroadcastNode = 0xffffffffu;
 constexpr int MaxMessages = 100;
+constexpr int MaxDebugPackets = 80;
 
 struct EndpointInfo {
     uint8_t address = 0;
@@ -58,30 +59,44 @@ struct NodeSummary {
     bool isMine = false;
 };
 
+struct DebugPacket {
+    uint32_t time = 0;
+    std::string title;
+    std::string summary;
+    std::string meshFields;
+    std::string dataFields;
+    std::string decoded;
+};
+
 struct AppState {
     bool usbConnected = false;
     bool protocolReady = false;
     std::string usbStatus = "Scanning USB";
     std::string usbDetail;
     std::string logStatus = "log pending";
-    std::string netStatus = "net log pending";
+    std::string netStatus = "IP/UDP off; press +";
     std::string nodeName = "Unknown";
     std::string myNodeId = "waiting";
-    std::string channelName = "Primary";
+    std::string channelName = "LongFast";
     std::vector<std::string> protocolEvents;
     std::vector<std::string> streamEvents;
+    std::vector<DebugPacket> debugPackets;
     std::vector<NodeSummary> knownNodes;
     std::vector<UsbDeviceInfo> usbDevices;
     std::vector<Message> messages;
     int scrollOffset = 0;
     int uiTab = 0;
     bool showDiagnostics = false;
+    bool networkRequested = false;
+    bool networkReady = false;
     uint32_t txBytes = 0;
     uint32_t rxBytes = 0;
     uint32_t rxFrames = 0;
     uint32_t rxBadFrames = 0;
     uint32_t nodeCount = 0;
     uint32_t textMessageCount = 0;
+    uint32_t packetCount = 0;
+    uint32_t decodedPacketCount = 0;
     uint32_t lastPacketFrom = 0;
     uint32_t lastPacketTo = 0;
     uint32_t lastPacketPort = 0;

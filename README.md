@@ -16,7 +16,9 @@ Current real-Wii USB testing has only been done with:
   - Interface 0: CDC control, class `0x02`, subclass `0x02`, endpoint `0x81`
   - Interface 1: CDC data, class `0x0a`, bulk OUT `0x01`, bulk IN `0x82`
 
-For that hardware, WiiMesh has successfully sent `ToRadio.want_config_id` using synchronous USB bulk write to endpoint `0x01`, received Meshtastic `FromRadio` frames, parsed node information, and displayed known nodes on the Wii.
+For that hardware, WiiMesh has successfully sent `ToRadio.want_config_id` using USB bulk write to endpoint `0x01`, received Meshtastic `FromRadio` frames, parsed node information, decoded direct `TEXT_MESSAGE_APP` packets, displayed received direct messages on the Wii, and saved them to `messages.dat`.
+
+As of `v0.1.51`, the known-good real-hardware path is direct-message receive from a second Meshtastic device through the RAK4631 over USB CDC. Channel-message receive and other USB serial chipsets still need separate hardware confirmation.
 
 Other Meshtastic USB devices and serial chipsets are not confirmed yet. They should be treated as diagnostic targets until their Wii USB descriptors and setup requirements are captured.
 

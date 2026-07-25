@@ -12,6 +12,13 @@ public:
     explicit MeshtasticProtocol(Logger *logger);
     void reset();
     bool startConfig(Transport &transport);
+    bool sendHeartbeat(Transport &transport);
+    void setWakeMode(uint32_t mode);
+    uint32_t wakeMode() const;
+    const char *wakeModeName() const;
+    static uint32_t wakeModeCount();
+    static const char *wakeModeName(uint32_t mode);
+    bool sendText(Transport &transport, uint32_t to, uint8_t channel, const std::string &text, bool wantAck);
     void poll(Transport &transport, AppState &state);
     bool parseFromRadio(const std::vector<uint8_t> &payload, AppState &state);
 
@@ -21,13 +28,27 @@ private:
     FrameState frameState_ = NeedStart1;
     uint16_t frameLen_ = 0;
     std::vector<uint8_t> frame_;
-    uint32_t wantConfigId_ = 1;
+    uint32_t heartbeatNonce_ = 1;
+    uint32_t configNonce_ = 0x13572468;
+    uint32_t wakeMode_ = 0;
     uint32_t myNode_ = 0;
     std::map<uint32_t, std::string> nodeNames_;
     std::map<uint8_t, std::string> channels_;
+    std::string primaryFallbackName_ = "LongFast";
+    std::string consoleLine_;
 
     void updateKnownNodes(AppState &state);
+    void updatePrimaryFallback(AppState &state);
+    bool writeWake(Transport &transport);
+    bool writeWantConfig(Transport &transport, uint32_t nonce);
     void consume(uint8_t byte, AppState &state);
+    void consumeConsoleText(const std::vector<uint8_t> &payload, AppState &state);
+    void parseConsoleLine(const std::string &line, AppState &state);
+    void recordRawFrame(const std::vector<uint8_t> &payload, AppState &state);
+    void parseConfig(const std::vector<uint8_t> &payload, AppState &state);
+    void parseLoraConfig(const std::vector<uint8_t> &payload, AppState &state);
+    void parseLogRecord(const std::vector<uint8_t> &payload, AppState &state);
+    void parseMetadata(const std::vector<uint8_t> &payload, AppState &state);
     void parseMyInfo(const std::vector<uint8_t> &payload, AppState &state);
     void parseNodeInfo(const std::vector<uint8_t> &payload, AppState &state);
     void parseChannel(const std::vector<uint8_t> &payload, AppState &state);
@@ -35,5 +56,6 @@ private:
 };
 
 std::vector<uint8_t> buildMockTextFromRadio(uint32_t from, uint32_t to, uint8_t channel, const std::string &text);
+std::vector<uint8_t> buildTextToRadioFrame(uint32_t to, uint8_t channel, const std::string &text, bool wantAck);
 
 }

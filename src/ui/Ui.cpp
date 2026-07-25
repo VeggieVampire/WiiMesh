@@ -39,17 +39,23 @@ void Ui::updateInput(AppState &state) {
     }
     if (down & WPAD_BUTTON_2) {
         state.showDiagnostics = false;
-        state.uiTab = (state.uiTab + 1) % 3;
+        state.uiTab = (state.uiTab + 1) % 4;
         state.scrollOffset = 0;
+    }
+    if (down & WPAD_BUTTON_PLUS) {
+        state.networkRequested = true;
+        if (!state.networkReady) {
+            state.netStatus = "IP/UDP requested";
+        }
     }
     if (down & WPAD_BUTTON_LEFT) {
         state.showDiagnostics = false;
-        state.uiTab = (state.uiTab + 2) % 3;
+        state.uiTab = (state.uiTab + 3) % 4;
         state.scrollOffset = 0;
     }
     if (down & WPAD_BUTTON_RIGHT) {
         state.showDiagnostics = false;
-        state.uiTab = (state.uiTab + 1) % 3;
+        state.uiTab = (state.uiTab + 1) % 4;
         state.scrollOffset = 0;
     }
     if (down & WPAD_BUTTON_UP) {
@@ -59,7 +65,9 @@ void Ui::updateInput(AppState &state) {
         int itemCount = static_cast<int>(state.messages.size());
         if (state.uiTab == 1) itemCount = static_cast<int>(state.knownNodes.size());
         if (state.uiTab == 2) itemCount = static_cast<int>(state.streamEvents.size());
-        const int maxOffset = itemCount > 8 ? itemCount - 8 : 0;
+        if (state.uiTab == 3) itemCount = static_cast<int>(state.debugPackets.size());
+        const int pageItems = state.uiTab == 3 ? 1 : 8;
+        const int maxOffset = itemCount > pageItems ? itemCount - pageItems : 0;
         if (state.scrollOffset < maxOffset) state.scrollOffset++;
     }
 #else
@@ -91,16 +99,18 @@ void Ui::draw(const AppState &state) {
     std::printf("\x1b[6;6H USB  %-48.48s", state.usbStatus.c_str());
     const char *nodeName = state.nodeName == "Unknown" ? "waiting for MyNodeInfo" : state.nodeName.c_str();
     std::printf("\x1b[7;6H Me   %-12.12s  %-34.34s", state.myNodeId.c_str(), nodeName);
-    std::printf("\x1b[8;6H Ch   %-20.20s Nodes %-3u Text %-3u", state.channelName.c_str(),
-                state.nodeCount, state.textMessageCount);
+    std::printf("\x1b[8;6H Ch   %-18.18s Nodes %-3u Packets %-3u Text %-3u", state.channelName.c_str(),
+                state.nodeCount, state.packetCount, state.textMessageCount);
     std::printf("\x1b[9;6H RX   %u bytes / %u frames / bad %u     TX %u bytes",
                 state.rxBytes, state.rxFrames, state.rxBadFrames, state.txBytes);
-    std::printf("\x1b[10;6H============================================================");
-    std::printf("\x1b[12;6H %s MESSAGES   %s NODES   %s STREAM",
+    std::printf("\x1b[10;6H NET  %-55.55s", state.netStatus.c_str());
+    std::printf("\x1b[11;6H============================================================");
+    std::printf("\x1b[12;6H %s MSGS  %s NODES  %s STREAM  %s DEBUG",
                 state.uiTab == 0 ? "[*]" : "[ ]",
                 state.uiTab == 1 ? "[*]" : "[ ]",
-                state.uiTab == 2 ? "[*]" : "[ ]");
-    std::printf("\x1b[13;6H 2 or Left/Right: tabs    Up/Down: scroll    1: USB    HOME: exit");
+                state.uiTab == 2 ? "[*]" : "[ ]",
+                state.uiTab == 3 ? "[*]" : "[ ]");
+    std::printf("\x1b[13;6H 2/Left/Right: tabs  Up/Down: scroll  1: USB  +: IP  HOME: exit");
 
     if (state.showDiagnostics) {
         std::printf("\x1b[15;6HUSB Diagnostics");
@@ -132,8 +142,9 @@ void Ui::draw(const AppState &state) {
                 std::printf("\x1b[%d;8HWaiting for channel or direct text messages.", row++);
                 std::printf("\x1b[%d;8HUse Stream for live protocol traffic.", row++);
             }
-            const int start = state.scrollOffset;
-            for (int i = start; i < static_cast<int>(state.messages.size()) && row < 28; ++i) {
+            const int newest = static_cast<int>(state.messages.size()) - 1;
+            const int start = newest - state.scrollOffset;
+            for (int i = start; i >= 0 && row < 28; --i) {
                 const Message &m = state.messages[i];
                 std::printf("\x1b[%d;6H", row++);
                 printTime(m.rxTime);
@@ -151,10 +162,42 @@ void Ui::draw(const AppState &state) {
                 std::printf("\x1b[%d;9HRole Client    Source NodeDB", row++);
             }
         } else {
+            if (state.uiTab == 2) {
             std::printf("\x1b[%d;6HStreaming Log", row++);
+            std::printf("\x1b[%d;6HCompact event feed. Debug tab shows one detailed card.", row++);
             const int start = state.scrollOffset;
             for (int i = start; i < static_cast<int>(state.streamEvents.size()) && row < 28; ++i) {
-                std::printf("\x1b[%d;6H%.66s", row++, state.streamEvents[i].c_str());
+                std::string clean = state.streamEvents[i];
+                for (char &c : clean) {
+                    const unsigned char b = static_cast<unsigned char>(c);
+                    if (b < 32 || b > 126) {
+                        c = '.';
+                    }
+                }
+                std::printf("\x1b[%d;6H%.66s", row++, clean.c_str());
+            }
+            } else {
+                std::printf("\x1b[%d;6HDebug Panel  cards %u/%d", row++, static_cast<unsigned>(state.debugPackets.size()), MaxDebugPackets);
+                if (state.debugPackets.empty()) {
+                    std::printf("\x1b[%d;8HWaiting for packets.", row++);
+                    std::printf("\x1b[%d;8HSend or receive traffic to populate debug cards.", row++);
+                } else {
+                    int index = state.scrollOffset;
+                    if (index >= static_cast<int>(state.debugPackets.size())) {
+                        index = static_cast<int>(state.debugPackets.size()) - 1;
+                    }
+                    const DebugPacket &p = state.debugPackets[index];
+                    std::printf("\x1b[%d;6HCard %d/%u  %.20s", row, index + 1,
+                                static_cast<unsigned>(state.debugPackets.size()), p.title.c_str());
+                    std::printf("\x1b[%d;42H", row++);
+                    printTime(p.time);
+                    std::printf("\x1b[%d;6H%.66s", row++, p.summary.c_str());
+                    std::printf("\x1b[%d;6H%.66s", row++, p.meshFields.c_str());
+                    std::printf("\x1b[%d;6H%.66s", row++, p.dataFields.c_str());
+                    std::printf("\x1b[%d;6HDecoded Payload:", row++);
+                    std::printf("\x1b[%d;8H%.64s", row++, p.decoded.c_str());
+                    std::printf("\x1b[%d;6HSingle-card detail view. Up/Down changes card.", row++);
+                }
             }
         }
     }

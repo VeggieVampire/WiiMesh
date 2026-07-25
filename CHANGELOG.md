@@ -2,6 +2,136 @@
 
 All notable WiiMesh test-build changes are tracked here so real-Wii testing does not depend on chat history.
 
+## 0.1.51 - 2026-07-24
+
+- Shows newest messages first in the MSGS tab so freshly decoded texts are visible without scrolling.
+- Stops adding firmware-console `TEXT_MESSAGE_APP` sightings as placeholder messages; those now stay in Stream/Debug until the framed PhoneAPI packet arrives.
+- Keeps real decoded `TEXT_MESSAGE_APP` packets saving to `messages.dat` and appearing in MSGS.
+
+## 0.1.50 - 2026-07-24
+
+- Fixes USB receive truncation by reading Meshtastic serial chunks into a 512-byte buffer instead of 128 bytes.
+- This should prevent large `FromRadio` config/node/message frames from being partially copied and then discarded.
+- Keeps wake/session testing in place; current direct-message tests still use direct traffic only, not the shared channel.
+
+## 0.1.49 - 2026-07-24
+
+- Adds visible wake/resync mode logging for every config request.
+- Adds UDP `WAKES` to list available wake/resync modes.
+- Adds UDP `WAKE n` to select a wake/resync mode and immediately request config, so RAK serial startup can be tested from the PC without sending mesh traffic.
+
+## 0.1.48 - 2026-07-24
+
+- Adds Meshtastic-style pacing after serial writes so wake/config/heartbeat frames are not sent back-to-back faster than the RAK serial stack expects.
+- Sends a PhoneAPI heartbeat after the connection is established, matching the Meshtastic Python client behavior that keeps the serial session alive.
+- Renames the console-only fallback text so it no longer looks like a successfully decoded payload.
+
+## 0.1.47 - 2026-07-24
+
+- Changes serial wake/resync to match Meshtastic Python `SerialInterface`: writes 32 `0xc3` bytes before framed protobuf.
+- Reverts normal startup to one full config request with a non-`69420` nonce, matching Python full-node mode.
+- Removes the experimental forced `69420 -> heartbeat -> 69421` startup sequence from the Wii runtime.
+
+## 0.1.46 - 2026-07-24
+
+- Adds a fallback parser for RAK serial console lines that say `decoded message ... Portnum=1`.
+- Creates a visible Messages entry and Debug card when the firmware console proves a text packet was decoded, even if no framed `FromRadio.packet` arrives.
+- Clarifies Stream as the compact event feed and Debug as the single-card detail view.
+
+## 0.1.45 - 2026-07-24
+
+- Detects printable USB read chunks as RAK serial console/debug text.
+- Shows ASCII previews for console text in Stream and Debug instead of hex-only rows.
+- Includes both hex and ASCII previews in `RXUSB` file/UDP logs.
+
+## 0.1.44 - 2026-07-24
+
+- Decodes `FromRadio.metadata` enough to show firmware version strings instead of only raw hex.
+- Adds Metadata debug cards for device metadata frames.
+- Clarifies Debug tab numbering as `Card X/Y` and labels the card type in the header.
+
+## 0.1.43 - 2026-07-24
+
+- Logs every raw USB read chunk from the RAK as `RXUSB` before frame parsing.
+- Adds `USB RX` Debug cards so incoming bytes are visible even when they do not form a valid framed `FromRadio`.
+- Shows compact raw RX hex lines in Stream and raises Debug retention to 80 cards.
+
+## 0.1.42 - 2026-07-24
+
+- Logs every complete inbound framed `FromRadio` payload as `RXRAW` hex before parsing or filtering.
+- Logs outbound wake/config/heartbeat/text frames as `TXRAW` hex.
+- Adds display/log handling for more `FromRadio` variants: `log_record`, module config, queue status, metadata, and client notification.
+- Parses `log_record` enough to show firmware debug messages as readable Debug cards.
+- Improves serial frame resync when repeated `0x94` wake bytes or debug text appear in the stream.
+
+## 0.1.41 - 2026-07-24
+
+- Sanitizes Stream tab text so binary serial/protobuf bytes cannot render as garbage glyphs on the TV.
+- Adds structured malformed-`FromRadio` stream entries with field/wire/length and a short hex preview.
+- Keeps 30 parser stream events instead of 10 so config/channel startup traffic does not immediately evict useful packet logs.
+
+## 0.1.40 - 2026-07-24
+
+- Aligns serial startup with the current Meshtastic PhoneAPI reference: sends 4 wake bytes before the first framed protobuf.
+- Switches from legacy one-shot `want_config_id=1` to the documented two-stage handshake: config nonce `69420`, heartbeat, then NodeDB nonce `69421`.
+- Fixes `FromRadio.config` parsing by including field 5 in the accepted nested-message variants.
+
+## PC serial helpers - 2026-07-24
+
+- Adds Windows helper scripts to locate the RAK4631 USB serial port by VID/PID `239a:8029`.
+- Adds a PuTTY launcher helper for the detected COM port at 115200 baud.
+- Adds a Meshtastic CLI info collector that saves `--info` and `--nodes` output to `outputs/rak4631-pc-serial.log`.
+- Adds a Meshtastic Python packet capture helper that writes parsed packet dicts to `outputs/meshtastic-packets.jsonl` for comparison with WiiMesh `RXRAW` logs.
+
+## 0.1.39 - 2026-07-24
+
+- Adds a fourth `DEBUG` tab modeled after the Meshtastic app debug panel.
+- Stores packet debug cards with mesh summary, raw field layout, decoded data fields, port label, and decoded payload summary.
+- Keeps Stream as the compact live log while Debug shows one detailed packet at a time with D-pad scrolling.
+
+## 0.1.38 - 2026-07-24
+
+- Shows successful UDP-originated direct/channel sends immediately in Messages as `[sent]` entries.
+- Adds local Stream entries for Wii-to-RAK text sends, even if the RAK does not emit a serial ACK packet.
+- Raises the main-app Stream retention to 30 stored events for easier scrolling during send tests.
+
+## 0.1.37 - 2026-07-24
+
+- Labels common Meshtastic port numbers in the Stream tab instead of showing only numeric ports.
+- Treats `ROUTING_APP` port 5 packets as receipt/status entries in Messages so outgoing direct-message ACKs are visible.
+- Keeps the `Text` counter limited to real `TEXT_MESSAGE_APP` packets.
+
+## 0.1.36 - 2026-07-24
+
+- Fixes the default channel display: empty Meshtastic primary channel names now render from the LoRa modem preset.
+- Parses `FromRadio.config` LoRa settings and maps `LONG_FAST` to `LongFast`.
+- Starts the UI with `LongFast` instead of the incorrect `Primary` fallback.
+
+## 0.1.35 - 2026-07-24
+
+- Shows IP/UDP status on the main screen instead of only inside USB diagnostics.
+- Sends UDP command replies back to the PC, so `PING`, `DM`, `CH`, `CFG`, `CDC`, `MATRIX`, and `SCAN` report success or failure directly.
+- Widens the UDP command buffer so longer direct/channel text test messages fit.
+
+## 0.1.34 - 2026-07-24
+
+- Adds test-only UDP text send commands after IP/UDP is manually enabled with `+`.
+- Supports `DM !nodeid message` for direct text and `CH message` for Primary channel text.
+- Encodes outbound `ToRadio.packet` with `MeshPacket.decoded` and `TEXT_MESSAGE_APP` payloads for Wii-to-RAK write testing.
+- Updates the UDP helper script so multi-word text is sent without uppercasing the message body.
+
+## 0.1.33 - 2026-07-24
+
+- Stops initializing Wii IP/UDP networking during boot.
+- Adds Wii Remote `+` as the manual trigger for UDP logging and UDP command socket setup.
+- Shows the IP/UDP state on screen so USB testing can start without waiting on DHCP/network setup.
+
+## 0.1.32 - 2026-07-24
+
+- Logs every received MeshPacket to the Stream tab and UDP before filtering for text.
+- Adds packet and decoded-packet counters.
+- Logs MeshPacket field/wire summaries, decoded payload size, port number, channel/direct direction, and encrypted/no-decoded cases.
+
 ## 0.1.31 - 2026-07-24
 
 - Moves the UI lower into the TV-safe area and removes the top pseudo-logo clutter.
