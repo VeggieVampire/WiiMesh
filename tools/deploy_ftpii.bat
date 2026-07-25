@@ -1,8 +1,8 @@
 @echo off
 setlocal
 
-set "OUT_DIR=%~dp0"
-set "ROOT=%~dp0..\work\WiiMesh"
+set "ROOT=%~dp0.."
+set "OUT_DIR=%ROOT%\"
 set "WII_IP=%~1"
 if "%WII_IP%"=="" set "WII_IP=192.168.0.13"
 set "WII_DEVICE=%~2"
@@ -96,14 +96,8 @@ if exist "%ROOT%\Makefile" (
   popd
   >> "%LOG%" echo Build complete.
 
-  copy /Y "%ROOT%\boot.dol" "%OUT_DIR%boot.dol" >> "%LOG%" 2>&1
-  if errorlevel 1 (
-    echo Could not copy built boot.dol to outputs.
-    >> "%LOG%" echo ERROR: Could not copy built boot.dol.
-    exit /b 1
-  )
 ) else (
-  >> "%LOG%" echo Source tree not found; uploading existing outputs files.
+  >> "%LOG%" echo Source tree not found; uploading existing files.
 )
 
 if not exist "%OUT_DIR%boot.dol" (
@@ -141,9 +135,9 @@ curl --fail --list-only "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/" >> "%LOG%" 2>&1
 curl --verbose --fail --ftp-create-dirs -T "%OUT_DIR%meta.xml" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/meta.xml" >> "%LOG%" 2>&1
 if errorlevel 1 goto upload_failed
 
-if exist "%OUT_DIR%icon.png" (
+if exist "%ROOT%\assets\icon.png" (
   >> "%LOG%" echo Upload icon.png to "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/icon.png"
-  curl --verbose --fail --ftp-create-dirs -T "%OUT_DIR%icon.png" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/icon.png" >> "%LOG%" 2>&1
+  curl --verbose --fail --ftp-create-dirs -T "%ROOT%\assets\icon.png" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/icon.png" >> "%LOG%" 2>&1
   if errorlevel 1 goto upload_failed
 ) else (
   >> "%LOG%" echo No icon.png found; skipping icon upload.

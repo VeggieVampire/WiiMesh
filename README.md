@@ -42,9 +42,43 @@ Other Meshtastic USB devices and serial chipsets are not confirmed yet. They sho
 
 ## Build
 
-Install devkitPro with devkitPPC, libogc, and libfat, then run:
+Install devkitPro with the Wii package group, then run `make`.
+
+### Windows
+
+1. Install devkitPro from the official installer.
+2. Open **devkitPro MSYS2** from the Start menu.
+3. Run:
 
 ```sh
+pacman -Syu
+pacman -S wii-dev git make
+git clone https://github.com/VeggieVampire/WiiMesh.git
+cd WiiMesh
+make clean
+make
+```
+
+### Linux or macOS
+
+Install devkitPro pacman using the official devkitPro instructions, then run:
+
+```sh
+sudo dkp-pacman -Syu
+sudo dkp-pacman -S wii-dev
+git clone https://github.com/VeggieVampire/WiiMesh.git
+cd WiiMesh
+make clean
+make
+```
+
+### Existing Checkout
+
+If you already cloned the repo:
+
+```sh
+cd WiiMesh
+make clean
 make
 ```
 
@@ -54,11 +88,28 @@ The output is:
 boot.dol
 ```
 
-Copy it to:
+Copy it to the Homebrew Channel app folder:
 
 ```text
 SD:/apps/wii-mesh/boot.dol
 ```
+
+For a local SD card mounted on Windows as drive `E:`, the copy command is:
+
+```bat
+mkdir E:\apps\wii-mesh
+copy boot.dol E:\apps\wii-mesh\boot.dol
+copy meta.xml E:\apps\wii-mesh\meta.xml
+copy assets\icon.png E:\apps\wii-mesh\icon.png
+```
+
+If FTPii is running on the Wii, this repo also includes a Windows deploy helper:
+
+```bat
+tools\deploy_ftpii.bat 192.168.0.13
+```
+
+Replace `192.168.0.13` with the IP shown by FTPii.
 
 ## Host Mock Test
 
@@ -68,7 +119,7 @@ The parser and mock transport can be exercised without Wii hardware:
 make host-test
 ```
 
-This compiles a native executable that feeds a synthetic Meshtastic text frame into the protocol layer.
+This requires a host C++ compiler such as `g++`. It compiles and runs a native executable that feeds a synthetic Meshtastic text frame into the protocol layer.
 
 ## Real Wii USB Data Collection
 
