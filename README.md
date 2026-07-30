@@ -36,6 +36,8 @@ Other Meshtastic USB devices and serial chipsets are not confirmed yet. They sho
   - channel-vs-direct detection
   - sender node ID and known sender names
 - Provides a TV-safe receive UI navigable with the Wii Remote D-pad.
+- Draws a graphics-backed dashboard skin under the UI text using libogc/gxflux.
+- Loads an optional custom GUI background from `SD:/apps/wii-mesh/theme/background.rgb565`.
 - Saves the last 100 messages to `SD:/apps/wii-mesh/messages.dat`.
 - Saves diagnostics to `SD:/apps/wii-mesh/debug.log`.
 - Handles unplug/reconnect by returning to enumeration and reopening supported serial devices.
@@ -110,6 +112,63 @@ tools\deploy_ftpii.bat 192.168.0.13
 ```
 
 Replace `192.168.0.13` with the IP shown by FTPii.
+
+## Custom GUI Theme Background
+
+WiiMesh can load a custom full-screen GUI skin from:
+
+```text
+SD:/apps/wii-mesh/theme/background.rgb565
+```
+
+Convert a PNG/JPG/BMP image on Windows:
+
+```bat
+tools\make_theme_background.bat my-theme.png background.rgb565
+```
+
+If the converter says Pillow is missing:
+
+```bat
+py -m pip install pillow
+```
+
+Copy the generated file to:
+
+```text
+SD:/apps/wii-mesh/theme/background.rgb565
+```
+
+See [docs/themes.md](docs/themes.md) for theme image notes.
+
+## GUI Layout Editor
+
+WiiMesh includes a Windows-friendly Python editor for planning dashboard section
+positions and labels:
+
+```bat
+tools\mesh_layout_editor.bat
+```
+
+It saves a flat config named `MeshLayout.config`, intended for:
+
+```text
+SD:/apps/wii-mesh/theme/MeshLayout.config
+```
+
+See [docs/layout-editor.md](docs/layout-editor.md).
+
+After enabling IP/UDP in WiiMesh with the `+` button, the editor can upload,
+download, reload, and import live sample data over UDP without FTPii.
+
+You can also upload from the command line:
+
+```bat
+tools\upload_layout_udp.bat 192.168.0.13 MeshLayout.config
+```
+
+This sends `LAYOUT_SET` commands for every config value and then sends
+`LAYOUT_SAVE`.
 
 ## Host Mock Test
 

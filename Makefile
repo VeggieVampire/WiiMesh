@@ -12,7 +12,7 @@ BUILD       := build
 SOURCES     := src src/transport src/meshtastic src/ui src/storage
 INCLUDES    := include
 DATA        :=
-LIBS        := -lwiiuse -lbte -lfat -logc
+LIBS        := -lgxflux -lasnd -lwiiuse -lbte -lfat -logc
 LIBDIRS     :=
 HOST_CXX    ?= g++
 

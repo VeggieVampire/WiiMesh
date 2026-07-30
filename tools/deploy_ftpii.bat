@@ -1,12 +1,27 @@
 @echo off
 setlocal
 
-set "ROOT=%~dp0.."
+set "SCRIPT_DIR=%~dp0"
+set "ROOT=%SCRIPT_DIR%.."
 set "OUT_DIR=%ROOT%\"
+if exist "%SCRIPT_DIR%boot.dol" (
+  set "OUT_DIR=%SCRIPT_DIR%"
+  set "ROOT=%SCRIPT_DIR%..\work\WiiMesh"
+)
+if not exist "%ROOT%\Makefile" if exist "%SCRIPT_DIR%..\boot.dol" (
+  set "OUT_DIR=%SCRIPT_DIR%.."
+  set "ROOT=%SCRIPT_DIR%..\work\WiiMesh"
+)
 set "WII_IP=%~1"
 if "%WII_IP%"=="" set "WII_IP=192.168.0.13"
 set "WII_DEVICE=%~2"
 if "%WII_DEVICE%"=="" set "WII_DEVICE=sd"
+set "UPLOAD_LAYOUT=0"
+set "UPLOAD_THEME=0"
+if /I "%~3"=="--upload-layout" set "UPLOAD_LAYOUT=1"
+if /I "%~3"=="--upload-theme" set "UPLOAD_THEME=1"
+if /I "%~4"=="--upload-layout" set "UPLOAD_LAYOUT=1"
+if /I "%~4"=="--upload-theme" set "UPLOAD_THEME=1"
 set "FTP_URL=ftp://%WII_IP%/"
 set "APP_SLUG=wii-mesh"
 set "LOG=%~dp0ftp.log"
@@ -22,6 +37,9 @@ set "PREFETCH_PREFIX=%PREFETCH_DIR%\%STAMP%_%WII_IP%_%WII_DEVICE%_%APP_SLUG%"
 >> "%LOG%" echo Wii IP: %WII_IP%
 >> "%LOG%" echo Wii device: %WII_DEVICE%
 >> "%LOG%" echo Target folder: /%WII_DEVICE%/apps/%APP_SLUG%/
+>> "%LOG%" echo Preserve GUI.config: yes
+>> "%LOG%" echo Upload MeshLayout.config: %UPLOAD_LAYOUT%
+>> "%LOG%" echo Upload theme background: %UPLOAD_THEME%
 >> "%LOG%" echo.
 echo FTP log: %LOG%
 if not exist "%PREFETCH_DIR%" mkdir "%PREFETCH_DIR%" >nul 2>nul
@@ -64,6 +82,14 @@ if errorlevel 1 (
   echo Saved previous remote listing: %PREFETCH_PREFIX%_listing.txt
 )
 
+curl --fail --list-only "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/" -o "%PREFETCH_PREFIX%_theme_listing.txt" >> "%LOG%" 2>&1
+if errorlevel 1 (
+  >> "%LOG%" echo No existing remote theme folder listing found before upload.
+  if exist "%PREFETCH_PREFIX%_theme_listing.txt" del "%PREFETCH_PREFIX%_theme_listing.txt" >nul 2>nul
+) else (
+  echo Saved previous theme listing: %PREFETCH_PREFIX%_theme_listing.txt
+)
+
 curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/debug.log" -o "%PREFETCH_PREFIX%_debug.log" >> "%LOG%" 2>&1
 if errorlevel 1 curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/DEBUG.LOG" -o "%PREFETCH_PREFIX%_debug.log" >> "%LOG%" 2>&1
 if errorlevel 1 (
@@ -82,6 +108,26 @@ if errorlevel 1 (
   echo Saved previous messages: %PREFETCH_PREFIX%_messages.dat
 )
 
+curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/GUI.config" -o "%PREFETCH_PREFIX%_GUI.config" >> "%LOG%" 2>&1
+if errorlevel 1 curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/gui.config" -o "%PREFETCH_PREFIX%_GUI.config" >> "%LOG%" 2>&1
+if errorlevel 1 (
+  >> "%LOG%" echo No existing GUI.config found before upload.
+  if exist "%PREFETCH_PREFIX%_GUI.config" del "%PREFETCH_PREFIX%_GUI.config" >nul 2>nul
+) else (
+  echo Saved previous GUI config: %PREFETCH_PREFIX%_GUI.config
+)
+>> "%LOG%" echo Remote GUI.config is preserved. This script never uploads GUI.config.
+
+curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/MeshLayout.config" -o "%PREFETCH_PREFIX%_MeshLayout.config" >> "%LOG%" 2>&1
+if errorlevel 1 curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/MESHLAYOUT.CONFIG" -o "%PREFETCH_PREFIX%_MeshLayout.config" >> "%LOG%" 2>&1
+if errorlevel 1 (
+  >> "%LOG%" echo No existing theme/MeshLayout.config found before upload.
+  if exist "%PREFETCH_PREFIX%_MeshLayout.config" del "%PREFETCH_PREFIX%_MeshLayout.config" >nul 2>nul
+) else (
+  echo Saved previous MeshLayout config: %PREFETCH_PREFIX%_MeshLayout.config
+)
+>> "%LOG%" echo Remote MeshLayout.config is preserved unless --upload-layout is passed.
+
 if exist "%ROOT%\Makefile" (
   echo Building WiiMesh...
   >> "%LOG%" echo Running make...
@@ -94,6 +140,8 @@ if exist "%ROOT%\Makefile" (
     exit /b 1
   )
   popd
+  copy /Y "%ROOT%\boot.dol" "%OUT_DIR%boot.dol" >> "%LOG%" 2>&1
+  copy /Y "%ROOT%\meta.xml" "%OUT_DIR%meta.xml" >> "%LOG%" 2>&1
   >> "%LOG%" echo Build complete.
 
 ) else (
@@ -113,7 +161,7 @@ if not exist "%OUT_DIR%meta.xml" (
 )
 
 if not exist "%OUT_DIR%debug-target.txt" (
-  > "%OUT_DIR%debug-target.txt" echo 192.168.0.110
+  > "%OUT_DIR%debug-target.txt" echo 192.168.0.233
   >> "%LOG%" echo Created default debug-target.txt
 )
 
@@ -141,6 +189,41 @@ if exist "%ROOT%\assets\icon.png" (
   if errorlevel 1 goto upload_failed
 ) else (
   >> "%LOG%" echo No icon.png found; skipping icon upload.
+)
+
+set "THEME_BG="
+if exist "%ROOT%\theme\background.rgb565" set "THEME_BG=%ROOT%\theme\background.rgb565"
+if "%THEME_BG%"=="" if exist "%ROOT%\background.rgb565" set "THEME_BG=%ROOT%\background.rgb565"
+if "%UPLOAD_THEME%"=="1" (
+  if not "%THEME_BG%"=="" (
+    for %%F in ("%THEME_BG%") do (
+      >> "%LOG%" echo Local theme background size: %%~zF bytes
+      echo Local theme background size: %%~zF bytes
+    )
+    >> "%LOG%" echo Upload theme background to "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/background.rgb565"
+    curl --verbose --fail --ftp-create-dirs -T "%THEME_BG%" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/background.rgb565" >> "%LOG%" 2>&1
+    if errorlevel 1 goto upload_failed
+  ) else (
+    >> "%LOG%" echo No theme background found; using built-in GUI skin.
+  )
+) else (
+  >> "%LOG%" echo Theme background upload skipped by default. Pass --upload-theme to upload it.
+)
+
+set "LAYOUT_CONFIG="
+if exist "%ROOT%\theme\MeshLayout.config" set "LAYOUT_CONFIG=%ROOT%\theme\MeshLayout.config"
+if "%LAYOUT_CONFIG%"=="" if exist "%ROOT%\MeshLayout.config" set "LAYOUT_CONFIG=%ROOT%\MeshLayout.config"
+if "%LAYOUT_CONFIG%"=="" if exist "%OUT_DIR%MeshLayout.config" set "LAYOUT_CONFIG=%OUT_DIR%MeshLayout.config"
+if "%UPLOAD_LAYOUT%"=="1" (
+  if not "%LAYOUT_CONFIG%"=="" (
+    >> "%LOG%" echo Upload MeshLayout.config to "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/MeshLayout.config"
+    curl --verbose --fail --ftp-create-dirs -T "%LAYOUT_CONFIG%" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/MeshLayout.config" >> "%LOG%" 2>&1
+    if errorlevel 1 goto upload_failed
+  ) else (
+    >> "%LOG%" echo No MeshLayout.config found; using built-in layout.
+  )
+) else (
+  >> "%LOG%" echo MeshLayout.config upload skipped by default. Pass --upload-layout to upload it.
 )
 
 >> "%LOG%" echo Upload debug-target.txt to "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/debug-target.txt"

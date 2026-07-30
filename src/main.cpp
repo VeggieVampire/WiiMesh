@@ -22,6 +22,7 @@
 using namespace wiimesh;
 
 static const char *AppDir = "sd:/apps/wii-mesh";
+static const char *ThemeDir = "sd:/apps/wii-mesh/theme";
 static const char *DebugLogPath = "sd:/apps/wii-mesh/debug.log";
 static const char *MessagesPath = "sd:/apps/wii-mesh/messages.dat";
 static constexpr unsigned short UdpLogPort = 44015;
@@ -115,6 +116,44 @@ static std::string wakeListText() {
     return out;
 }
 
+static std::string oneLine(std::string s) {
+    for (char &c : s) {
+        if (c == '\n' || c == '\r' || c == '\t') c = ' ';
+    }
+    return s;
+}
+
+static std::string liveLayoutSample(const AppState &state) {
+    std::string out;
+    const std::string nodeName = state.nodeName == "Unknown" ? "waiting" : state.nodeName;
+    out += "topbar.text=WiiMesh v" + std::string(AppVersion) + " " +
+           (state.protocolReady ? "ONLINE" : "SYNCING") + " Device: " +
+           nodeName + " Me: " + state.myNodeId + "\n";
+    if (!state.messages.empty()) {
+        const Message &m = state.messages.back();
+        const std::string sender = m.senderName.empty() ? m.senderId : m.senderName;
+        out += "ticker.text=ACCESS " + oneLine(sender + ": " + m.text) + "\n";
+        out += "messages.text=Messages | " + oneLine(std::string(m.direct ? "DM " : "CH ") +
+               sender + " | " + m.text) + " | " + std::to_string(state.messages.size()) + " saved\n";
+        out += "chat.text=Chat | " + oneLine(sender) + " | " + oneLine(m.text) + " | Read-only client\n";
+    }
+    out += "nodes.text=Nodes | " + std::to_string(state.nodeCount) + " known";
+    int shown = 0;
+    for (const auto &n : state.knownNodes) {
+        if (shown++ >= 4) break;
+        out += " | ";
+        out += oneLine(n.name.empty() ? n.nodeId : n.name);
+    }
+    out += "\n";
+    out += "radio_status.text=Radio Status | ";
+    out += state.protocolReady ? "Healthy\n" : "Connecting\n";
+    out += "telemetry.text=Telemetry | RX " + std::to_string(state.rxBytes) +
+           " TX " + std::to_string(state.txBytes) +
+           " Nodes " + std::to_string(state.nodeCount) +
+           " Text " + std::to_string(state.textMessageCount) + "\n";
+    return out;
+}
+
 #if defined(WIIMESH_WII)
 static s32 openCommandSocket(Logger &logger) {
     s32 sock = net_socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
@@ -146,12 +185,12 @@ static void sendCommandReply(s32 sock, const sockaddr_in &to, const char *text) 
 }
 
 static void pollCommandSocket(s32 sock, Logger &logger, UsbTransport &transport,
-                              MeshtasticProtocol &protocol, AppState &state,
+                              MeshtasticProtocol &protocol, Ui &ui, AppState &state,
                               bool &sentStart, bool &sentHeartbeat) {
     if (sock < 0) {
         return;
     }
-    char buffer[224] = {};
+    char buffer[1024] = {};
     sockaddr_in from;
     socklen_t fromLen = sizeof(from);
     s32 n = net_recvfrom(sock, buffer, sizeof(buffer) - 1, 0,
@@ -228,6 +267,27 @@ static void pollCommandSocket(s32 sock, Logger &logger, UsbTransport &transport,
         logDevices(logger, state);
         logger.line("UDP command SCAN complete");
         sendCommandReply(sock, from, "SCAN OK\n");
+    } else if (std::strcmp(buffer, "LAYOUT") == 0 || std::strcmp(buffer, "RELOAD_LAYOUT") == 0) {
+        const bool ok = ui.reloadLayout(state);
+        logger.line(std::string("UDP command LAYOUT ") + (ok ? "ok" : "failed"));
+        addStream(state, ok ? "Wii layout reloaded" : "Wii layout reload failed");
+        sendCommandReply(sock, from, ok ? "LAYOUT OK\n" : "LAYOUT FAILED\n");
+    } else if (std::strncmp(buffer, "LAYOUT_SET ", 11) == 0) {
+        const bool ok = ui.applyLayoutLine(state, buffer + 11);
+        logger.line(std::string("UDP command LAYOUT_SET ") + (ok ? "ok" : "ignored"));
+        sendCommandReply(sock, from, ok ? "LAYOUT_SET OK\n" : "LAYOUT_SET IGNORED\n");
+    } else if (std::strcmp(buffer, "LAYOUT_SAVE") == 0) {
+        const bool ok = ui.saveLayout(state);
+        logger.line(std::string("UDP command LAYOUT_SAVE ") + (ok ? "ok" : "failed"));
+        sendCommandReply(sock, from, ok ? "LAYOUT_SAVE OK\n" : "LAYOUT_SAVE FAILED\n");
+    } else if (std::strcmp(buffer, "LAYOUT_GET") == 0) {
+        const std::string layout = ui.exportLayout();
+        logger.line("UDP command LAYOUT_GET");
+        sendCommandReply(sock, from, layout.c_str());
+    } else if (std::strcmp(buffer, "LIVE_DATA") == 0) {
+        const std::string live = liveLayoutSample(state);
+        logger.line("UDP command LIVE_DATA");
+        sendCommandReply(sock, from, live.c_str());
     } else if (std::strncmp(buffer, "DM ", 3) == 0 || std::strncmp(buffer, "SEND ", 5) == 0) {
         const char *args = buffer + (buffer[0] == 'D' ? 3 : 5);
         uint32_t dest = 0;
@@ -276,7 +336,7 @@ static void pollCommandSocket(s32 sock, Logger &logger, UsbTransport &transport,
         logger.line(std::string("UDP command CH ") + (ok ? "ok" : "failed"));
         sendCommandReply(sock, from, ok ? "CH OK\n" : "CH FAILED\n");
     } else {
-        logger.line("UDP command unknown; use PING CDC WAKES WAKE CFG MATRIX SCAN DM CH");
+        logger.line("UDP command unknown; use PING CDC WAKES WAKE CFG MATRIX SCAN LAYOUT LAYOUT_SET LAYOUT_SAVE LAYOUT_GET LIVE_DATA DM CH");
         sendCommandReply(sock, from, "UNKNOWN COMMAND\n");
     }
 }
@@ -301,6 +361,13 @@ static void logDevices(Logger &logger, const AppState &state) {
 }
 
 int main() {
+#if defined(WIIMESH_WII)
+    fatInitDefault();
+    mkdir("sd:/apps", 0777);
+    mkdir(AppDir, 0777);
+    mkdir(ThemeDir, 0777);
+#endif
+
     Ui ui;
     ui.init();
 
@@ -308,12 +375,6 @@ int main() {
     state.usbStatus = "Booting WiiMesh";
     state.usbDetail = "Build " + std::string(AppVersion);
     ui.draw(state);
-
-#if defined(WIIMESH_WII)
-    fatInitDefault();
-    mkdir("sd:/apps", 0777);
-    mkdir(AppDir, 0777);
-#endif
 
     Logger logger;
     if (logger.open(DebugLogPath)) {
@@ -364,7 +425,7 @@ int main() {
             networkAttempting = false;
             state.logStatus = logger.status();
         }
-        pollCommandSocket(commandSocket, logger, transport, protocol, state, sentStart, sentHeartbeat);
+        pollCommandSocket(commandSocket, logger, transport, protocol, ui, state, sentStart, sentHeartbeat);
 #endif
 
         if (!transport.isOpen()) {
@@ -438,6 +499,31 @@ int main() {
                     addStream(state, "Wii -> RAK heartbeat");
                 }
                 state.usbDetail = transport.lastError();
+            }
+        }
+
+        if (!state.pendingSendText.empty()) {
+            if (transport.isOpen() && sentStart && state.pendingSendTo != 0) {
+                const bool ok = protocol.sendText(transport, state.pendingSendTo, 0,
+                                                  state.pendingSendText.c_str(), true);
+                if (ok) {
+                    state.txBytes += static_cast<uint32_t>(state.pendingSendText.size());
+                    state.usbStatus = "Reply queued";
+                    addStream(state, "Wii -> RAK UI DM queued");
+                    logger.line("UI reply queued to " + nodeId(state.pendingSendTo));
+                    state.pendingSendText.clear();
+                    state.pendingSendTo = 0;
+                } else {
+                    state.usbStatus = "Reply send failed";
+                    logger.line("UI reply send failed");
+                    state.pendingSendText.clear();
+                    state.pendingSendTo = 0;
+                }
+            } else {
+                state.usbStatus = "Reply needs node/USB";
+                logger.line("UI reply discarded; missing node or USB");
+                state.pendingSendText.clear();
+                state.pendingSendTo = 0;
             }
         }
 

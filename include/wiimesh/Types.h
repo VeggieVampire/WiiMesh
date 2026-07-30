@@ -6,7 +6,7 @@
 
 namespace wiimesh {
 
-constexpr const char *AppVersion = "0.1.51";
+constexpr const char *AppVersion = "0.1.89";
 constexpr uint32_t BroadcastNode = 0xffffffffu;
 constexpr int MaxMessages = 100;
 constexpr int MaxDebugPackets = 80;
@@ -86,7 +86,21 @@ struct AppState {
     std::vector<Message> messages;
     int scrollOffset = 0;
     int uiTab = 0;
+    int transitionTicks = 0;
+    int transitionDir = 1;
+    int selectedNodeIndex = 0;
+    int selectedMessageIndex = 0;
+    int keyboardCursor = 0;
+    bool dashboardFocused = false;
+    bool composingMessage = false;
+    std::string chatPeerNodeId;
+    std::string chatPeerName = "No contact";
+    std::string composeText;
+    std::string pendingSendText;
+    uint32_t pendingSendTo = 0;
     bool showDiagnostics = false;
+    bool showCalibration = false;
+    bool debugEnabled = false;
     bool networkRequested = false;
     bool networkReady = false;
     uint32_t txBytes = 0;
@@ -95,6 +109,7 @@ struct AppState {
     uint32_t rxBadFrames = 0;
     uint32_t nodeCount = 0;
     uint32_t textMessageCount = 0;
+    uint32_t seenMessageCount = 0;
     uint32_t packetCount = 0;
     uint32_t decodedPacketCount = 0;
     uint32_t lastPacketFrom = 0;
