@@ -1,7 +1,7 @@
 @echo off
 setlocal
 set "WII_IP=%~1"
-if "%WII_IP%"=="" set "WII_IP=192.168.0.13"
+if "%WII_IP%"=="" set "WII_IP=192.168.0.42"
 set "CMD="
 shift /1
 :collect_args

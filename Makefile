@@ -15,9 +15,10 @@ DATA        :=
 LIBS        := -lgxflux -lasnd -lwiiuse -lbte -lfat -logc
 LIBDIRS     :=
 HOST_CXX    ?= g++
+PYTHON      ?= python
 
 CXXFLAGS    := -g -O2 -Wall -Wextra -ffunction-sections -fdata-sections \
-               -DWIIMESH_WII=1 $(MACHDEP)
+               -DWIIMESH_WII=1 $(EXTRA_CXXFLAGS) $(MACHDEP)
 CFLAGS      := $(CXXFLAGS)
 LDFLAGS     := -g $(MACHDEP) -Wl,--gc-sections
 
@@ -40,9 +41,13 @@ export INCLUDE := $(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 export LIBPATHS := $(foreach dir,$(LIBDIRS),-L$(dir)/lib) -L$(LIBOGC_LIB)
 export CPPFLAGS := $(INCLUDE)
 
-.PHONY: all clean run host-test
+.PHONY: all clean run host-test icons
 
-all: $(BUILD)
+all: icons $(BUILD)
+
+icons:
+	@$(PYTHON) tools/compile_ui_icons.py
+	@$(PYTHON) tools/compile_emoji_icons.py
 
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@

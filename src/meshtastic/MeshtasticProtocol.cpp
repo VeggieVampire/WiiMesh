@@ -1,7 +1,10 @@
 #include "wiimesh/MeshtasticProtocol.h"
 #include "wiimesh/ProtoReader.h"
 
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <ctime>
 #if defined(WIIMESH_WII)
 #include <unistd.h>
@@ -10,6 +13,7 @@
 namespace wiimesh {
 
 constexpr uint32_t PortTextMessage = 1;
+constexpr uint32_t PortPosition = 3;
 constexpr uint32_t PortRouting = 5;
 
 struct WakeMode {
@@ -133,6 +137,103 @@ static std::string asciiPreview(const std::vector<uint8_t> &payload, size_t maxB
     return out;
 }
 
+static float fixed32ToFloat(uint32_t bits) {
+    float value = 0.0f;
+    static_assert(sizeof(value) == sizeof(bits), "float must be 32-bit");
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+static std::string formatMacAddress(const std::vector<uint8_t> &bytes) {
+    if (bytes.empty()) return "";
+    static const char *hex = "0123456789ABCDEF";
+    std::string out;
+    const size_t n = std::min<size_t>(6, bytes.size());
+    for (size_t i = 0; i < n; ++i) {
+        if (i) out += ':';
+        const uint8_t b = bytes[i];
+        out += hex[(b >> 4) & 0x0f];
+        out += hex[b & 0x0f];
+    }
+    return out;
+}
+
+static std::string utf8CodepointSummary(const std::string &text) {
+    static const char *hex = "0123456789ABCDEF";
+    std::string out;
+    for (size_t i = 0; i < text.size();) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        uint32_t cp = 0;
+        size_t advance = 1;
+        if ((c & 0x80) == 0) {
+            ++i;
+            continue;
+        } else if ((c & 0xe0) == 0xc0 && i + 1 < text.size()) {
+            cp = ((c & 0x1f) << 6) |
+                (static_cast<unsigned char>(text[i + 1]) & 0x3f);
+            advance = 2;
+        } else if ((c & 0xf0) == 0xe0 && i + 2 < text.size()) {
+            cp = ((c & 0x0f) << 12) |
+                ((static_cast<unsigned char>(text[i + 1]) & 0x3f) << 6) |
+                (static_cast<unsigned char>(text[i + 2]) & 0x3f);
+            advance = 3;
+        } else if ((c & 0xf8) == 0xf0 && i + 3 < text.size()) {
+            cp = ((c & 0x07) << 18) |
+                ((static_cast<unsigned char>(text[i + 1]) & 0x3f) << 12) |
+                ((static_cast<unsigned char>(text[i + 2]) & 0x3f) << 6) |
+                (static_cast<unsigned char>(text[i + 3]) & 0x3f);
+            advance = 4;
+        }
+        if (cp != 0) {
+            if (!out.empty()) out += ' ';
+            out += "U+";
+            bool started = false;
+            for (int shift = 28; shift >= 0; shift -= 4) {
+                const unsigned digit = (cp >> shift) & 0x0f;
+                if (digit || started || shift == 0) {
+                    out += hex[digit];
+                    started = true;
+                }
+            }
+        }
+        i += advance;
+    }
+    return out.empty() ? "ascii only" : out;
+}
+
+static bool hasUtf8IconCandidate(const std::string &text) {
+    for (size_t i = 0; i < text.size();) {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        uint32_t cp = 0;
+        size_t advance = 1;
+        if ((c & 0x80) == 0) {
+            ++i;
+            continue;
+        } else if ((c & 0xe0) == 0xc0 && i + 1 < text.size()) {
+            cp = ((c & 0x1f) << 6) |
+                (static_cast<unsigned char>(text[i + 1]) & 0x3f);
+            advance = 2;
+        } else if ((c & 0xf0) == 0xe0 && i + 2 < text.size()) {
+            cp = ((c & 0x0f) << 12) |
+                ((static_cast<unsigned char>(text[i + 1]) & 0x3f) << 6) |
+                (static_cast<unsigned char>(text[i + 2]) & 0x3f);
+            advance = 3;
+        } else if ((c & 0xf8) == 0xf0 && i + 3 < text.size()) {
+            cp = ((c & 0x07) << 18) |
+                ((static_cast<unsigned char>(text[i + 1]) & 0x3f) << 12) |
+                ((static_cast<unsigned char>(text[i + 2]) & 0x3f) << 6) |
+                (static_cast<unsigned char>(text[i + 3]) & 0x3f);
+            advance = 4;
+        }
+        if (cp >= 0x2300 && cp != 0xfe0f && cp != 0x200d && cp != 0x2b1b &&
+            !(cp >= 0x1f3fb && cp <= 0x1f3ff)) {
+            return true;
+        }
+        i += advance;
+    }
+    return false;
+}
+
 static bool looksLikeConsoleText(const std::vector<uint8_t> &payload) {
     size_t printable = 0;
     size_t considered = 0;
@@ -155,6 +256,108 @@ static bool parseHexField(const std::string &line, const std::string &key, uint3
     const unsigned long out = std::strtoul(line.c_str() + start + 2, &end, 16);
     value = static_cast<uint32_t>(out);
     return end != line.c_str() + start + 2;
+}
+
+static bool parseFloatField(const std::string &line, const std::string &key, float &value) {
+    const size_t p = line.find(key);
+    if (p == std::string::npos) return false;
+    char *end = nullptr;
+    const double out = std::strtod(line.c_str() + p + key.size(), &end);
+    if (end == line.c_str() + p + key.size()) return false;
+    value = static_cast<float>(out);
+    return true;
+}
+
+static bool parseIntField(const std::string &line, const std::string &key, int32_t &value) {
+    const size_t p = line.find(key);
+    if (p == std::string::npos) return false;
+    char *end = nullptr;
+    const long out = std::strtol(line.c_str() + p + key.size(), &end, 10);
+    if (end == line.c_str() + p + key.size()) return false;
+    value = static_cast<int32_t>(out);
+    return true;
+}
+
+static bool findIpv4(const std::string &line, std::string &ip) {
+    for (size_t i = 0; i < line.size(); ++i) {
+        if (!std::isdigit(static_cast<unsigned char>(line[i]))) continue;
+        size_t end = i;
+        int dots = 0;
+        while (end < line.size() &&
+               (std::isdigit(static_cast<unsigned char>(line[end])) || line[end] == '.')) {
+            if (line[end] == '.') ++dots;
+            ++end;
+        }
+        if (dots != 3) continue;
+        const std::string candidate = line.substr(i, end - i);
+        int parts = 0;
+        bool ok = true;
+        size_t p = 0;
+        while (p < candidate.size()) {
+            size_t next = candidate.find('.', p);
+            const std::string part = candidate.substr(p, next == std::string::npos ? std::string::npos : next - p);
+            if (part.empty() || part.size() > 3) {
+                ok = false;
+                break;
+            }
+            char *stop = nullptr;
+            const long value = std::strtol(part.c_str(), &stop, 10);
+            if (stop == part.c_str() || *stop != '\0' || value < 0 || value > 255) {
+                ok = false;
+                break;
+            }
+            ++parts;
+            if (next == std::string::npos) break;
+            p = next + 1;
+        }
+        if (ok && parts == 4) {
+            ip = candidate;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void parseConsoleStatusLine(const std::string &line, AppState &state) {
+    int32_t intValue = 0;
+    float floatValue = 0.0f;
+    if (parseFloatField(line, "air_util_tx=", floatValue)) state.airUtilTx = floatValue;
+    if (parseFloatField(line, "channel_utilization=", floatValue)) state.channelUtilization = floatValue;
+    if (parseIntField(line, "battery_level=", intValue)) state.batteryLevel = intValue;
+    if (parseFloatField(line, "voltage=", floatValue)) state.voltage = floatValue;
+    if (parseFloatField(line, "rxSNR=", floatValue)) state.lastRxSnr = floatValue;
+    if (parseIntField(line, "rxRSSI=", intValue)) state.lastRxRssi = intValue;
+    if (parseIntField(line, "rxRSSI ", intValue)) state.lastRxRssi = intValue;
+
+    std::string lower = line;
+    std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    if ((lower.find("wifi") != std::string::npos || lower.find("ip") != std::string::npos ||
+         lower.find("http") != std::string::npos || lower.find("network") != std::string::npos) &&
+        lower.find("rxrssi") == std::string::npos) {
+        std::string ip;
+        if (findIpv4(line, ip)) {
+            state.meshDeviceIp = ip;
+        }
+    }
+
+    const size_t online = line.find("Node status update:");
+    if (online != std::string::npos) {
+        char *end = nullptr;
+        const char *start = line.c_str() + online + std::strlen("Node status update:");
+        const long onlineCount = std::strtol(start, &end, 10);
+        if (end != start) state.onlineNodeCount = static_cast<int32_t>(onlineCount);
+        const size_t total = line.find("online,", online);
+        if (total != std::string::npos) {
+            start = line.c_str() + total + std::strlen("online,");
+            const long totalCount = std::strtol(start, &end, 10);
+            if (end != start) {
+                state.totalNodeCount = static_cast<int32_t>(totalCount);
+                state.nodeCount = static_cast<uint32_t>(totalCount);
+            }
+        }
+    }
 }
 
 static void serialWritePause(unsigned microseconds = 100000) {
@@ -419,6 +622,7 @@ void MeshtasticProtocol::consumeConsoleText(const std::vector<uint8_t> &payload,
 }
 
 void MeshtasticProtocol::parseConsoleLine(const std::string &line, AppState &state) {
+    parseConsoleStatusLine(line, state);
     if (line.find("decoded message") == std::string::npos || line.find("Portnum=1") == std::string::npos) {
         return;
     }
@@ -645,6 +849,25 @@ void MeshtasticProtocol::parseMetadata(const std::vector<uint8_t> &payload, AppS
     addDebugPacket(state, debug);
 }
 
+std::string hardwareModelName(uint32_t model) {
+    switch (model) {
+    case 0: return "UNSET";
+    case 9: return "RAK4631";
+    case 16: return "TLORA_T3_S3";
+    case 10: return "HELTEC_V2";
+    case 43: return "HELTEC_V3";
+    case 49: return "HELTEC_PAPER";
+    case 50: return "T_DECK";
+    case 71: return "TRACKER_T1000_E";
+    case 84: return "WISMESH_TAP";
+    case 95: return "SEEED_SOLAR";
+    case 105: return "WISMESH_TAG";
+    case 110: return "HELTEC_V4";
+    default: break;
+    }
+    return "MODEL " + std::to_string(model);
+}
+
 void MeshtasticProtocol::updateKnownNodes(AppState &state) {
     state.knownNodes.clear();
     for (const auto &entry : nodeNames_) {
@@ -652,13 +875,110 @@ void MeshtasticProtocol::updateKnownNodes(AppState &state) {
         node.id = entry.first;
         node.nodeId = nodeId(entry.first);
         node.name = entry.second.empty() ? node.nodeId : entry.second;
+        auto shortEntry = nodeShortNames_.find(entry.first);
+        node.shortName = shortEntry == nodeShortNames_.end() ? "" : shortEntry->second;
+        auto macEntry = nodeMacAddresses_.find(entry.first);
+        node.macAddress = macEntry == nodeMacAddresses_.end() ? "" : macEntry->second;
+        auto hwEntry = nodeHardwareModels_.find(entry.first);
+        node.hardwareModel = hwEntry == nodeHardwareModels_.end() ? 0 : hwEntry->second;
+        node.hardwareName = hardwareModelName(node.hardwareModel);
+        auto lastHeardEntry = nodeLastHeard_.find(entry.first);
+        node.lastHeard = lastHeardEntry == nodeLastHeard_.end() ? 0 : lastHeardEntry->second;
+        auto hopsEntry = nodeHopsAway_.find(entry.first);
+        node.hopsAway = hopsEntry == nodeHopsAway_.end() ? -1 : hopsEntry->second;
+        auto snrEntry = nodeSnr_.find(entry.first);
+        node.snr = snrEntry == nodeSnr_.end() ? -1000.0f : snrEntry->second;
+        auto batteryEntry = nodeBatteryLevels_.find(entry.first);
+        node.batteryLevel = batteryEntry == nodeBatteryLevels_.end() ? -1 : batteryEntry->second;
+        auto voltageEntry = nodeVoltages_.find(entry.first);
+        node.voltage = voltageEntry == nodeVoltages_.end() ? 0.0f : voltageEntry->second;
+        auto latEntry = nodeLatitudes_.find(entry.first);
+        auto lonEntry = nodeLongitudes_.find(entry.first);
+        node.hasPosition = latEntry != nodeLatitudes_.end() && lonEntry != nodeLongitudes_.end() &&
+                           latEntry->second != 0 && lonEntry->second != 0;
+        if (node.hasPosition) {
+            node.latitudeI = latEntry->second;
+            node.longitudeI = lonEntry->second;
+            auto altEntry = nodeAltitudes_.find(entry.first);
+            node.altitude = altEntry == nodeAltitudes_.end() ? 0 : altEntry->second;
+            auto posTimeEntry = nodePositionTimes_.find(entry.first);
+            node.positionTime = posTimeEntry == nodePositionTimes_.end() ? 0 : posTimeEntry->second;
+            auto precisionEntry = nodePrecisionBits_.find(entry.first);
+            node.precisionBits = precisionEntry == nodePrecisionBits_.end() ? 0 : precisionEntry->second;
+        }
         node.isMine = entry.first == myNode_;
         state.knownNodes.push_back(node);
         if (node.isMine && state.nodeName == state.myNodeId) {
             state.nodeName = node.name;
         }
     }
+    std::stable_sort(state.knownNodes.begin(), state.knownNodes.end(),
+        [](const NodeSummary &a, const NodeSummary &b) {
+            const bool ai = hasUtf8IconCandidate(a.shortName) || hasUtf8IconCandidate(a.name);
+            const bool bi = hasUtf8IconCandidate(b.shortName) || hasUtf8IconCandidate(b.name);
+            if (ai != bi) return ai;
+            return a.id < b.id;
+        });
     state.nodeCount = static_cast<uint32_t>(state.knownNodes.size());
+}
+
+bool MeshtasticProtocol::parsePosition(uint32_t node, const std::vector<uint8_t> &payload, AppState &state) {
+    if (node == 0 || payload.empty()) return false;
+    int32_t lat = 0;
+    int32_t lon = 0;
+    int32_t altitude = 0;
+    uint32_t time = 0;
+    uint32_t precisionBits = 0;
+    bool sawLat = false;
+    bool sawLon = false;
+    ProtoReader p(payload.data(), payload.size());
+    uint32_t field = 0, wire = 0;
+    while (p.next(field, wire)) {
+        if (field == 1 && wire == 5) {
+            uint32_t raw = 0;
+            p.readFixed32(raw);
+            lat = static_cast<int32_t>(raw);
+            sawLat = true;
+        } else if (field == 2 && wire == 5) {
+            uint32_t raw = 0;
+            p.readFixed32(raw);
+            lon = static_cast<int32_t>(raw);
+            sawLon = true;
+        } else if (field == 3 && wire == 0) {
+            uint64_t alt = 0;
+            p.readVarint(alt);
+            altitude = static_cast<int32_t>(alt);
+        } else if ((field == 4 || field == 7) && wire == 5) {
+            p.readFixed32(time);
+        } else if (field == 23 && wire == 0) {
+            uint64_t bits = 0;
+            p.readVarint(bits);
+            precisionBits = static_cast<uint32_t>(bits);
+        } else {
+            p.skip(wire);
+        }
+    }
+    if (!sawLat || !sawLon || lat == 0 || lon == 0) return false;
+    const bool changed = nodeLatitudes_[node] != lat || nodeLongitudes_[node] != lon ||
+                         nodeAltitudes_[node] != altitude || nodePrecisionBits_[node] != precisionBits;
+    nodeLatitudes_[node] = lat;
+    nodeLongitudes_[node] = lon;
+    nodeAltitudes_[node] = altitude;
+    if (time != 0) nodePositionTimes_[node] = time;
+    if (precisionBits != 0) nodePrecisionBits_[node] = precisionBits;
+    if (nodeNames_.find(node) == nodeNames_.end()) {
+        nodeNames_[node] = nodeId(node);
+    }
+    updateKnownNodes(state);
+    if (changed) {
+        state.mapRevision++;
+        char line[160];
+        std::snprintf(line, sizeof(line), "position %s lat %.7f lon %.7f alt %ld precision %lu",
+                      nodeId(node).c_str(), lat / 10000000.0, lon / 10000000.0,
+                      static_cast<long>(altitude), static_cast<unsigned long>(precisionBits));
+        addProtocolEvent(state, logger_, line);
+    }
+    return true;
 }
 
 void MeshtasticProtocol::parseMyInfo(const std::vector<uint8_t> &payload, AppState &state) {
@@ -682,6 +1002,15 @@ void MeshtasticProtocol::parseMyInfo(const std::vector<uint8_t> &payload, AppSta
 void MeshtasticProtocol::parseNodeInfo(const std::vector<uint8_t> &payload, AppState &state) {
     uint32_t num = 0;
     std::string name;
+    std::string shortName;
+    std::string macAddress;
+    uint32_t hardwareModel = 0;
+    uint32_t lastHeard = 0;
+    int32_t hopsAway = -1;
+    float snr = -1000.0f;
+    int32_t batteryLevel = -1;
+    float voltage = 0.0f;
+    std::vector<uint8_t> position;
     ProtoReader r(payload.data(), payload.size());
     uint32_t field = 0, wire = 0;
     while (r.next(field, wire)) {
@@ -694,14 +1023,54 @@ void MeshtasticProtocol::parseNodeInfo(const std::vector<uint8_t> &payload, AppS
             r.readBytes(user);
             ProtoReader u(user.data(), user.size());
             uint32_t uf = 0, uw = 0;
-            std::string longName, shortName, id;
+            std::string longName, id;
             while (u.next(uf, uw)) {
                 if (uf == 1 && uw == 2) u.readString(id);
                 else if (uf == 2 && uw == 2) u.readString(longName);
                 else if (uf == 3 && uw == 2) u.readString(shortName);
+                else if (uf == 4 && uw == 2) {
+                    std::vector<uint8_t> mac;
+                    u.readBytes(mac);
+                    macAddress = formatMacAddress(mac);
+                }
+                else if (uf == 5 && uw == 0) {
+                    uint64_t hw = 0;
+                    u.readVarint(hw);
+                    hardwareModel = static_cast<uint32_t>(hw);
+                }
                 else u.skip(uw);
             }
             name = !longName.empty() ? longName : (!shortName.empty() ? shortName : id);
+        } else if (field == 3 && wire == 2) {
+            r.readBytes(position);
+        } else if (field == 4 && wire == 5) {
+            uint32_t bits = 0;
+            r.readFixed32(bits);
+            snr = fixed32ToFloat(bits);
+        } else if (field == 5 && wire == 5) {
+            r.readFixed32(lastHeard);
+        } else if (field == 6 && wire == 2) {
+            std::vector<uint8_t> metrics;
+            r.readBytes(metrics);
+            ProtoReader m(metrics.data(), metrics.size());
+            uint32_t mf = 0, mw = 0;
+            while (m.next(mf, mw)) {
+                if (mf == 1 && mw == 0) {
+                    uint64_t b = 0;
+                    m.readVarint(b);
+                    batteryLevel = static_cast<int32_t>(b);
+                } else if (mf == 2 && mw == 5) {
+                    uint32_t bits = 0;
+                    m.readFixed32(bits);
+                    voltage = fixed32ToFloat(bits);
+                } else {
+                    m.skip(mw);
+                }
+            }
+        } else if (field == 9 && wire == 0) {
+            uint64_t hops = 0;
+            r.readVarint(hops);
+            hopsAway = static_cast<int32_t>(hops);
         } else {
             r.skip(wire);
         }
@@ -709,13 +1078,28 @@ void MeshtasticProtocol::parseNodeInfo(const std::vector<uint8_t> &payload, AppS
     if (num != 0 && !name.empty()) {
         const bool wasNew = nodeNames_.find(num) == nodeNames_.end();
         nodeNames_[num] = name;
+        nodeShortNames_[num] = shortName;
+        if (!macAddress.empty()) nodeMacAddresses_[num] = macAddress;
+        if (hardwareModel != 0) nodeHardwareModels_[num] = hardwareModel;
+        if (lastHeard != 0) nodeLastHeard_[num] = lastHeard;
+        if (hopsAway >= 0) nodeHopsAway_[num] = hopsAway;
+        if (snr > -999.0f) nodeSnr_[num] = snr;
+        if (batteryLevel >= 0) nodeBatteryLevels_[num] = batteryLevel;
+        if (voltage > 0.0f) nodeVoltages_[num] = voltage;
+        if (!position.empty() && parsePosition(num, position, state)) {
+            addStreamEvent(state, logger_, "RAK -> Wii node position " + nodeId(num));
+        }
         updateKnownNodes(state);
         if (num == myNode_) {
             state.nodeName = name;
             state.myNodeId = nodeId(num);
         }
         if (wasNew || num == myNode_) {
-            addProtocolEvent(state, logger_, "node " + nodeId(num) + " " + name);
+            addProtocolEvent(state, logger_, "node " + nodeId(num) + " " + name +
+                             " short " + shortName + " utf8 long " + utf8CodepointSummary(name) +
+                             " short " + utf8CodepointSummary(shortName) +
+                             " hw " + hardwareModelName(hardwareModel) +
+                             (macAddress.empty() ? "" : " mac " + macAddress));
         }
     }
 }
@@ -723,6 +1107,14 @@ void MeshtasticProtocol::parseNodeInfo(const std::vector<uint8_t> &payload, AppS
 void MeshtasticProtocol::parseChannel(const std::vector<uint8_t> &payload, AppState &state) {
     int index = 0;
     std::string name;
+    int role = 0;
+    bool hasPsk = false;
+    size_t pskBytes = 0;
+    uint32_t channelId = 0;
+    bool uplinkEnabled = false;
+    bool downlinkEnabled = false;
+    bool muted = false;
+    uint32_t positionPrecision = 0;
     ProtoReader r(payload.data(), payload.size());
     uint32_t field = 0, wire = 0;
     while (r.next(field, wire)) {
@@ -736,9 +1128,49 @@ void MeshtasticProtocol::parseChannel(const std::vector<uint8_t> &payload, AppSt
             ProtoReader s(settings.data(), settings.size());
             uint32_t sf = 0, sw = 0;
             while (s.next(sf, sw)) {
-                if (sf == 3 && sw == 2) s.readString(name);
-                else s.skip(sw);
+                if (sf == 2 && sw == 2) {
+                    std::vector<uint8_t> psk;
+                    s.readBytes(psk);
+                    pskBytes = psk.size();
+                    hasPsk = !psk.empty() && !(psk.size() == 1 && psk[0] == 0);
+                } else if (sf == 3 && sw == 2) {
+                    s.readString(name);
+                } else if (sf == 4 && sw == 5) {
+                    s.readFixed32(channelId);
+                } else if (sf == 5 && sw == 0) {
+                    uint64_t v = 0;
+                    s.readVarint(v);
+                    uplinkEnabled = v != 0;
+                } else if (sf == 6 && sw == 0) {
+                    uint64_t v = 0;
+                    s.readVarint(v);
+                    downlinkEnabled = v != 0;
+                } else if (sf == 7 && sw == 2) {
+                    std::vector<uint8_t> module;
+                    s.readBytes(module);
+                    ProtoReader m(module.data(), module.size());
+                    uint32_t mf = 0, mw = 0;
+                    while (m.next(mf, mw)) {
+                        if (mf == 1 && mw == 0) {
+                            uint64_t v = 0;
+                            m.readVarint(v);
+                            positionPrecision = static_cast<uint32_t>(v);
+                        } else if (mf == 2 && mw == 0) {
+                            uint64_t v = 0;
+                            m.readVarint(v);
+                            muted = v != 0;
+                        } else {
+                            m.skip(mw);
+                        }
+                    }
+                } else {
+                    s.skip(sw);
+                }
             }
+        } else if (field == 3 && wire == 0) {
+            uint64_t rValue = 0;
+            r.readVarint(rValue);
+            role = static_cast<int>(rValue);
         } else {
             r.skip(wire);
         }
@@ -746,8 +1178,35 @@ void MeshtasticProtocol::parseChannel(const std::vector<uint8_t> &payload, AppSt
     if (index >= 0 && index < 256) {
         channels_[static_cast<uint8_t>(index)] = name.empty() && index == 0 ? primaryFallbackName_ : name;
         if (index == 0) state.channelName = channels_[0];
+        ChannelSummary summary;
+        summary.index = index;
+        summary.name = channels_[static_cast<uint8_t>(index)];
+        summary.role = role;
+        summary.hasPsk = hasPsk;
+        summary.pskBytes = pskBytes;
+        summary.channelId = channelId;
+        summary.uplinkEnabled = uplinkEnabled;
+        summary.downlinkEnabled = downlinkEnabled;
+        summary.muted = muted;
+        summary.positionPrecision = positionPrecision;
+        bool replaced = false;
+        for (auto &existing : state.channels) {
+            if (existing.index == index) {
+                existing = summary;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            state.channels.push_back(summary);
+        }
+        std::stable_sort(state.channels.begin(), state.channels.end(),
+                         [](const ChannelSummary &a, const ChannelSummary &b) {
+                             return a.index < b.index;
+                         });
         addProtocolEvent(state, logger_, "channel " + std::to_string(index) + " " +
-                         channels_[static_cast<uint8_t>(index)]);
+                         channels_[static_cast<uint8_t>(index)] + " role " + std::to_string(role) +
+                         " psk " + std::to_string(static_cast<unsigned>(pskBytes)));
     }
 }
 
@@ -787,6 +1246,7 @@ void MeshtasticProtocol::parsePacket(const std::vector<uint8_t> &payload, AppSta
     state.packetCount++;
     uint32_t port = 0;
     std::string text;
+    std::vector<uint8_t> dataPayload;
     std::string dataFields;
     if (!decoded.empty()) {
         state.decodedPacketCount++;
@@ -800,7 +1260,7 @@ void MeshtasticProtocol::parsePacket(const std::vector<uint8_t> &payload, AppSta
                 d.readVarint(p);
                 port = static_cast<uint32_t>(p);
             } else if (field == 2 && wire == 2) {
-                d.readString(text);
+                d.readBytes(dataPayload);
             } else {
                 if (!d.skip(wire)) {
                     addProtocolEvent(state, logger_, "data skip failed field " + std::to_string(field) +
@@ -809,6 +1269,9 @@ void MeshtasticProtocol::parsePacket(const std::vector<uint8_t> &payload, AppSta
                 }
             }
         }
+    }
+    if (port == PortTextMessage && !dataPayload.empty()) {
+        text.assign(dataPayload.begin(), dataPayload.end());
     }
 
     state.lastPacketFrom = msg.from;
@@ -829,6 +1292,8 @@ void MeshtasticProtocol::parsePacket(const std::vector<uint8_t> &payload, AppSta
     debug.dataFields = dataFields.empty() ? "decoded: none" : "data fields: " + dataFields;
     if (port == PortTextMessage && !text.empty()) {
         debug.decoded = "Decoded Payload: " + text;
+    } else if (port == PortPosition) {
+        debug.decoded = "Decoded Payload: POSITION_APP";
     } else if (port == PortRouting) {
         debug.decoded = "Decoded Payload: ROUTING_APP delivery/status packet";
     } else {
@@ -847,6 +1312,15 @@ void MeshtasticProtocol::parsePacket(const std::vector<uint8_t> &payload, AppSta
     if (!hasDecoded || decoded.empty()) {
         addProtocolEvent(state, logger_, std::string("packet without decoded payload ") +
                          (hasEncrypted ? "encrypted" : "no-data"));
+        return;
+    }
+    if (port == PortPosition) {
+        if (parsePosition(msg.from, dataPayload, state)) {
+            addProtocolEvent(state, logger_, "position packet from " + nodeId(msg.from));
+            addStreamEvent(state, logger_, "RAK -> Wii POSITION_APP map point " + nodeId(msg.from));
+        } else {
+            addProtocolEvent(state, logger_, "position packet without usable lat/lon from " + nodeId(msg.from));
+        }
         return;
     }
     if (port == PortRouting) {

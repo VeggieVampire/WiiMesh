@@ -33,6 +33,19 @@ private:
     uint32_t wakeMode_ = 0;
     uint32_t myNode_ = 0;
     std::map<uint32_t, std::string> nodeNames_;
+    std::map<uint32_t, std::string> nodeShortNames_;
+    std::map<uint32_t, std::string> nodeMacAddresses_;
+    std::map<uint32_t, uint32_t> nodeHardwareModels_;
+    std::map<uint32_t, uint32_t> nodeLastHeard_;
+    std::map<uint32_t, int32_t> nodeHopsAway_;
+    std::map<uint32_t, float> nodeSnr_;
+    std::map<uint32_t, int32_t> nodeBatteryLevels_;
+    std::map<uint32_t, float> nodeVoltages_;
+    std::map<uint32_t, int32_t> nodeLatitudes_;
+    std::map<uint32_t, int32_t> nodeLongitudes_;
+    std::map<uint32_t, int32_t> nodeAltitudes_;
+    std::map<uint32_t, uint32_t> nodePositionTimes_;
+    std::map<uint32_t, uint32_t> nodePrecisionBits_;
     std::map<uint8_t, std::string> channels_;
     std::string primaryFallbackName_ = "LongFast";
     std::string consoleLine_;
@@ -51,6 +64,7 @@ private:
     void parseMetadata(const std::vector<uint8_t> &payload, AppState &state);
     void parseMyInfo(const std::vector<uint8_t> &payload, AppState &state);
     void parseNodeInfo(const std::vector<uint8_t> &payload, AppState &state);
+    bool parsePosition(uint32_t node, const std::vector<uint8_t> &payload, AppState &state);
     void parseChannel(const std::vector<uint8_t> &payload, AppState &state);
     void parsePacket(const std::vector<uint8_t> &payload, AppState &state);
 };

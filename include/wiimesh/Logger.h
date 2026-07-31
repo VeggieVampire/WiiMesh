@@ -11,6 +11,8 @@ public:
     void close();
     void line(const std::string &text);
     std::string status() const;
+    std::string localIp() const { return localIp_; }
+    std::string targetIp() const { return targetIp_; }
 
 private:
     void *file_ = nullptr;
@@ -18,6 +20,8 @@ private:
     int udpSocket_ = -1;
     unsigned short udpPort_ = 0;
     unsigned int udpTarget_ = 0;
+    std::string localIp_;
+    std::string targetIp_;
     bool udpReady_ = false;
 };
 

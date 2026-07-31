@@ -2,7 +2,7 @@
 setlocal
 
 set "WII_IP=%~1"
-if "%WII_IP%"=="" set "WII_IP=192.168.0.13"
+if "%WII_IP%"=="" set "WII_IP=192.168.0.42"
 set "WII_DEVICE=%~2"
 if "%WII_DEVICE%"=="" set "WII_DEVICE=sd"
 set "FTP_URL=ftp://%WII_IP%/"
@@ -66,6 +66,24 @@ if errorlevel 1 (
   if exist "%OUT_DIR%GUI.config" del "%OUT_DIR%GUI.config" >nul 2>nul
 ) else (
   echo Saved "%OUT_DIR%GUI.config"
+)
+
+curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/Settings.config" -o "%OUT_DIR%Settings.config" >> "%FETCH_LOG%" 2>&1
+if errorlevel 1 curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/settings.config" -o "%OUT_DIR%Settings.config" >> "%FETCH_LOG%" 2>&1
+if errorlevel 1 (
+  >> "%FETCH_LOG%" echo No Settings.config fetched.
+  if exist "%OUT_DIR%Settings.config" del "%OUT_DIR%Settings.config" >nul 2>nul
+) else (
+  echo Saved "%OUT_DIR%Settings.config"
+)
+
+curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/mesh_map.dat" -o "%OUT_DIR%mesh_map.dat" >> "%FETCH_LOG%" 2>&1
+if errorlevel 1 curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/MESH_MAP.DAT" -o "%OUT_DIR%mesh_map.dat" >> "%FETCH_LOG%" 2>&1
+if errorlevel 1 (
+  >> "%FETCH_LOG%" echo No mesh_map.dat fetched.
+  if exist "%OUT_DIR%mesh_map.dat" del "%OUT_DIR%mesh_map.dat" >nul 2>nul
+) else (
+  echo Saved "%OUT_DIR%mesh_map.dat"
 )
 
 curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/MeshLayout.config" -o "%OUT_DIR%MeshLayout.remote.config" >> "%FETCH_LOG%" 2>&1

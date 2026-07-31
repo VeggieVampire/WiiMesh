@@ -6,7 +6,7 @@
 
 namespace wiimesh {
 
-constexpr const char *AppVersion = "0.1.89";
+constexpr const char *AppVersion = "0.1.139";
 constexpr uint32_t BroadcastNode = 0xffffffffu;
 constexpr int MaxMessages = 100;
 constexpr int MaxDebugPackets = 80;
@@ -56,7 +56,35 @@ struct NodeSummary {
     uint32_t id = 0;
     std::string nodeId;
     std::string name;
+    std::string shortName;
+    std::string macAddress;
+    uint32_t hardwareModel = 0;
+    std::string hardwareName;
+    uint32_t lastHeard = 0;
+    int32_t hopsAway = -1;
+    float snr = -1000.0f;
+    int32_t batteryLevel = -1;
+    float voltage = 0.0f;
+    bool hasPosition = false;
+    int32_t latitudeI = 0;
+    int32_t longitudeI = 0;
+    int32_t altitude = 0;
+    uint32_t positionTime = 0;
+    uint32_t precisionBits = 0;
     bool isMine = false;
+};
+
+struct ChannelSummary {
+    int index = 0;
+    std::string name;
+    int role = 0;
+    bool hasPsk = false;
+    size_t pskBytes = 0;
+    uint32_t channelId = 0;
+    bool uplinkEnabled = false;
+    bool downlinkEnabled = false;
+    bool muted = false;
+    uint32_t positionPrecision = 0;
 };
 
 struct DebugPacket {
@@ -75,6 +103,9 @@ struct AppState {
     std::string usbDetail;
     std::string logStatus = "log pending";
     std::string netStatus = "IP/UDP off; press +";
+    std::string wiiIp = "offline";
+    std::string udpTargetIp;
+    std::string meshDeviceIp = "unknown";
     std::string nodeName = "Unknown";
     std::string myNodeId = "waiting";
     std::string channelName = "LongFast";
@@ -82,6 +113,7 @@ struct AppState {
     std::vector<std::string> streamEvents;
     std::vector<DebugPacket> debugPackets;
     std::vector<NodeSummary> knownNodes;
+    std::vector<ChannelSummary> channels;
     std::vector<UsbDeviceInfo> usbDevices;
     std::vector<Message> messages;
     int scrollOffset = 0;
@@ -89,6 +121,24 @@ struct AppState {
     int transitionTicks = 0;
     int transitionDir = 1;
     int selectedNodeIndex = 0;
+    int nodeOptionTab = 0;
+    int selectedChannelIndex = 0;
+    int selectedChatIndex = 0;
+    int chatChannelIndex = -1;
+    int selectedSettingsIndex = 0;
+    int selectedScreensaverIndex = 0;
+    int selectedFontIndex = 0;
+    int screensaverMode = 0;
+    int screensaverSpeed = 2;
+    int fontStyle = 1;
+    int fontSize = 3;
+    bool screensaverActive = false;
+    uint32_t screensaverDebugSeq = 0;
+    std::string screensaverDebug;
+    bool pointerVisible = false;
+    bool pointerEnabled = true;
+    int pointerX = 0;
+    int pointerY = 0;
     int selectedMessageIndex = 0;
     int keyboardCursor = 0;
     bool dashboardFocused = false;
@@ -112,10 +162,19 @@ struct AppState {
     uint32_t seenMessageCount = 0;
     uint32_t packetCount = 0;
     uint32_t decodedPacketCount = 0;
+    uint32_t mapRevision = 0;
     uint32_t lastPacketFrom = 0;
     uint32_t lastPacketTo = 0;
     uint32_t lastPacketPort = 0;
     uint8_t lastPacketChannel = 0;
+    int32_t onlineNodeCount = -1;
+    int32_t totalNodeCount = -1;
+    int32_t batteryLevel = -1;
+    float voltage = 0.0f;
+    float channelUtilization = -1.0f;
+    float airUtilTx = -1.0f;
+    float lastRxSnr = -1000.0f;
+    int32_t lastRxRssi = 0;
 };
 
 std::string hex16(uint16_t value);

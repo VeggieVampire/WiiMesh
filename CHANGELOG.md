@@ -2,12 +2,317 @@
 
 All notable WiiMesh test-build changes are tracked here so real-Wii testing does not depend on chat history.
 
+## 0.1.139 - 2026-07-31
+
+- Adds live `sd:/apps/wii-mesh/Settings.config` support for font, screensaver, debug, and pointer settings.
+- Adds UDP commands `SETTINGS_GET`, `SETTINGS_SET key=value`, `SETTINGS_RELOAD`, and `SETTINGS_SAVE`.
+- Loads `Settings.config` on boot and creates it with defaults when missing.
+- Updates FTPii fetch/deploy helpers to fetch and preserve `Settings.config`.
+
+## 0.1.138 - 2026-07-31
+
+- Fixes Screensaver Test immediately closing when the A button is still held from selecting it.
+- Adds screensaver start/dismiss details to `debug.log`, including active state, idle counter, dismiss block, mode, and speed.
+- Enables Wii Remote IR tracking, logs pointer position in heartbeat lines, and draws a small crosshair cursor in the graphical UI.
+
+## 0.1.137 - 2026-07-31
+
+- Replaces the three-step font size picker with a 0-6 slider for finer TV tuning.
+- Adds intermediate bitmap font scaling so text can be larger without jumping straight to huge 2x pixels.
+- Adds Pixel, TV Shadow, Soft Pixel, and Bold font render styles.
+- Logs active font style and size when changed and in heartbeat lines.
+
+## 0.1.136 - 2026-07-31
+
+- Adds UI tab breadcrumbs to `debug.log`, including selected node count and map revision.
+- Logs a matching `UI draw ok` line after the first draw on a newly entered tab so crashes during drawing are easier to identify.
+
+## 0.1.135 - 2026-07-31
+
+- Fixes a Map tab freeze when the selected node index is outside the first plotted node set.
+- Clamps the map line anchor so large node lists cannot read past the plotted coordinate arrays.
+
+## 0.1.134 - 2026-07-31
+
+- Renames the Meshtastic hardware IP label from `RAK IP` to `M Device IP` so future non-RAK devices fit the UI.
+
+## 0.1.133 - 2026-07-31
+
+- Separates Wii LAN IP, Meshtastic device IP, and UDP log target in the UI.
+- Displays Wii IP in the graphical header and Home/Status screens.
+- Learns the RAK/Meshtastic device IP from network-related serial console lines when the radio reports one.
+
+## 0.1.132 - 2026-07-31
+
+- Splits Screensaver and Font controls into their own Settings submenus.
+- Adds a Screensaver test action so the saver can be started immediately from Settings.
+- Keeps the main Settings screen focused on logs/status, submenus, and network.
+
+## 0.1.131 - 2026-07-31
+
+- Adds more inner padding to Node List badges so custom icons do not touch the circular border.
+- Shrinks badge artwork slightly and moves node text farther right for better spacing.
+
+## 0.1.130 - 2026-07-31
+
+- Adds Settings rows for live graphical font style and font size testing on the Wii.
+- Supports Clean, Shadow, and Bold Test styles plus Small, Normal, and Large size choices.
+
+## 0.1.129 - 2026-07-31
+
+- Fixes the over-bold graphical font from 0.1.128 that merged letters together on the Wii.
+- Keeps text contrast shadowing while restoring clean one-pixel glyph strokes.
+
+## 0.1.128 - 2026-07-31
+
+- Makes the graphical UI font heavier and easier to read on a real TV.
+- Adds subtle text shadowing and wider glyph strokes for better contrast.
+
+## 0.1.127 - 2026-07-31
+
+- Slows the screensaver default movement.
+- Adds Settings controls for screensaver display mode and speed.
+- Lets the screensaver show the node name, latest unread message, or active users summary.
+- Active Users screensaver mode now gives each visible user its own bouncing label box.
+
+## 0.1.126 - 2026-07-30
+
+- Changes the `CHAT` tab into an active chats list like Meshtastic UI.
+- Opens selected channels and direct contacts into a dedicated threaded chat view.
+- Adds unread highlighting and channel/direct chat target state so channel conversations no longer live in the channel list.
+
+## 0.1.125 - 2026-07-30
+
+- Restores the Channels tab to the Meshtastic UI model: a list of configured channels with key/lock status.
+- Makes `A` on a selected channel open that channel in the Messages/Chats view.
+- Keeps channel configuration detail out of the main Channels screen.
+
+## 0.1.124 - 2026-07-30
+
+- Moves channel chat history to the Chats/Messages tab where Meshtastic Web shows `Messages: Primary`.
+- Restores the Channels tab to channel configuration/settings only.
+- Adds a compact contacts rail to the Chats tab so channel conversation and available nodes live together like Meshtastic Web.
+
+## 0.1.123 - 2026-07-30
+
+- Adds selected-channel chat history to the Channels tab after comparing Meshtastic Web's `Messages: Primary` view in Chrome.
+- Keeps channel settings compact at the top and shows recent non-direct messages for the selected channel underneath.
+- Adds emulator mock channel traffic so the Channels tab can be visually checked without live radio packets.
+
+## 0.1.122 - 2026-07-30
+
+- Updates the Channels tab after comparing it in Dolphin with Meshtastic Web in Chrome.
+- Changes Channels from a list-only view to a Meshtastic-style channel selector row: `Primary`, `Ch 1` through `Ch 7`.
+- Shows a selected-channel settings panel with role, PSK/key state, name, uplink/downlink, location precision, and muted status.
+
+## 0.1.121 - 2026-07-30
+
+- Reworks the Channels tab into graphical Meshtastic-style channel rows instead of placeholder pills.
+- Parses channel role, PSK/key presence, channel ID, uplink/downlink flags, muted state, and position precision from channel config frames.
+- Adds Up/Down selection inside the Channels tab after pressing `A`.
+- Adds debug/mock channel rows so emulator builds can preview primary, secondary, and open channel states.
+
+## 0.1.120 - 2026-07-30
+
+- Adds a first Wii-side plain-HTTP map tile downloader for internet-connected consoles.
+- Reads the tile URL template from `sd:/apps/wii-mesh/maps.url` and supports `{z}`, `{x}`, and `{y}` placeholders.
+- Adds UDP commands `TILE_URL`, `TILE_SET_URL`, and `TILE_GET z x y [style]`.
+- Saves downloaded PNG tiles under `sd:/apps/wii-mesh/maps/<style>/<z>/<x>/<y>.png`, matching Meshtastic UI's tile folder shape.
+- Adds PC helper BAT files for setting the tile URL and downloading a single test tile over UDP.
+
+## 0.1.119 - 2026-07-30
+
+- Parses Meshtastic `POSITION_APP` packets and NodeInfo embedded positions into per-node latitude, longitude, altitude, and precision fields.
+- Changes the Map screen to prefer real GPS positions when available, while keeping the relative fallback for nodes without coordinates.
+- Saves downloaded map data to `sd:/apps/wii-mesh/mesh_map.dat` and adds UDP `MAP_GET`/`MAP_SAVE` commands.
+- Adds `tools/download_map_udp.bat` for pulling the live mesh map from the running Wii without FTP.
+- Updates the FTP log fetcher to pull `mesh_map.dat` when it exists.
+
+## 0.1.118 - 2026-07-30
+
+- Replaces the Map placeholder with a graphical relative mesh view using known Meshtastic nodes.
+- Draws stable node badge positions, mesh connection lines from this device, selected-node highlighting, and a node summary strip.
+- Keeps Map controls consistent with Node List: Up/Down changes the selected node and `A` opens chat with that node.
+
+## 0.1.117 - 2026-07-30
+
+- Moves the default graphical layout to the tuned Wii-style positions: left menu, compact header strip, wider content panel, and full-width footer.
+- Compacts older tall-header `GUI.config` layouts at runtime by shrinking the header and moving/expanding content upward, without writing over the saved config file.
+
+## 0.1.116 - 2026-07-30
+
+- Reduces the graphical header from a large duplicate dashboard card into a compact status strip.
+- Removes the repeated USB, Me, and RX rows from the graphical header because that detail already lives on Home/status screens.
+- Keeps the header focused on WiiMesh/version, online/IP state, channel/message counts, ticker text, and signal bars.
+
+## 0.1.115 - 2026-07-30
+
+- Shrinks graphical screen titles from large two-scale text to compact one-line labels.
+- Moves Home, Node List, Messages, Chat, and Node Options content upward to recover vertical space for cards and the compose keyboard.
+
+## 0.1.114 - 2026-07-30
+
+- Reworks the Messages screen into graphical message cards with a channel header, selected-card highlight, and clipped sender/message previews.
+- Adds a graphical direct-message compose keyboard inside Chat Detail so composing no longer drops back to the console-style text keyboard.
+- Wraps chat bubble text to stay inside the chat window and keeps the keyboard visible with D-pad selection, `A` to press a key, and `B` to cancel.
+- Fixes the message selection window so highlighted messages and `A` open/reply target the same message.
+
+## 0.1.113 - 2026-07-30
+
+- Uses the live Meshtastic Web node table as the Node List reference: avatar badge, long name, connection, SNR/last heard, model, and MAC-derived fallback.
+- Parses more `NodeInfo` protobuf fields: `snr`, `last_heard`, `device_metrics`, and `hops_away`.
+- Parses `User.macaddr` alongside `short_name` and `hw_model` so node cards have better identity/status detail.
+- Updates the Dolphin icon-debug sample data to exercise real-looking Meshtastic node cards without USB hardware.
+
+## 0.1.112 - 2026-07-30
+
+- Moves the normal Home, Node List, Channels, Chats, Map, Settings, Chat Detail, and Node Options screens to the graphics layer so the large console text no longer overlays the UI.
+- Reworks the Node List into Meshtastic-style cards with bordered avatar badges, long names, node IDs/short-name fallback, selected-row highlight, and right-side hardware/status text.
+- Keeps menu labels below the menu icons and clips all graphics-layer labels to their boxes to reduce text spill on TV output.
+- Parses the Meshtastic `User.hw_model` field from node info so nodes can show hardware labels such as `RAK4631`, `HELTEC_V3`, and `HELTEC_V4`.
+- Adds a graphical Node Options screen with Filter and Highlight tabs, preserving `A` to go deeper/focus and `B` to go back.
+
 ## Tools - 2026-07-29
 
 - FTPii deploy now prefetches the remote theme folder listing and `theme/MeshLayout.config` before uploading.
 - FTPii deploy preserves Wii-side `GUI.config` and `theme/MeshLayout.config` by default.
 - `MeshLayout.config` upload is now opt-in with `--upload-layout`; theme background upload is opt-in with `--upload-theme`.
 - FTPii log fetch now also pulls remote listings, `messages.dat`, `GUI.config`, and `theme/MeshLayout.config`.
+
+## 0.1.111 - 2026-07-30
+
+- Changes Meshtastic node emoji badges from 1-bit masks to 32x32 RGB565 pixel icons with per-pixel alpha.
+- Adds `outputs/emoji_atlas_preview.png` generation so emoji glyphs can be checked outside Dolphin before building.
+- Draws embedded emoji atlas pixels directly in the Wii Node List badge for closer one-to-one comparison with desktop Meshtastic.
+
+## 0.1.110 - 2026-07-30
+
+- Adds a build-time emoji icon atlas generated from the Windows emoji font for Meshtastic node short-name icons.
+- Renders the known `U+1F93A` Mesheteer short-name emoji as a bitmap badge instead of a generic hand-drawn fallback.
+- Aligns graphical Node List badge rows with the console text rows so badges stay beside the correct node names.
+- Adds a compile-time `WIIMESH_ICON_DEBUG` Dolphin test mode for icon comparison without USB hardware.
+
+## 0.1.109 - 2026-07-30
+
+- Removes redundant short-name text from Node List rows when the badge already represents the short name/icon.
+- Node List rows now show badge plus readable long name, with node ID/status on the second line.
+
+## 0.1.108 - 2026-07-30
+
+- Changes Node List avatars from square tiles to circular badges with a visible ring border, closer to Meshtastic web/PC node lists.
+- Enlarges single custom icon drawing to fill the badge more clearly.
+- Adds fixed pixel masks for person/running-style short-name icons commonly used as Meshtastic node badges.
+
+## 0.1.107 - 2026-07-30
+
+- Avatar/icon detection now checks Meshtastic `short_name` first, then `long_name`, matching how node badges are usually presented.
+- Enlarges Node List avatar tiles to 40x40 and adds a clear double border around both custom icons and short-name badges.
+- Custom multi-codepoint node icons are drawn larger as pixel masks in the badge instead of being tiny row markers.
+- Node diagnostics now log both long-name and short-name UTF-8 summaries for icon debugging.
+
+## 0.1.106 - 2026-07-30
+
+- Node badge colors are now stable per node identity/short name instead of being based on row position.
+- Matches Meshtastic's client-side color behavior more closely: `User` supplies names/identity, while WiiMesh derives the avatar color locally.
+- Keeps short-name badges consistent when sorting changes or newly discovered nodes arrive.
+
+## 0.1.105 - 2026-07-30
+
+- Node List now uses the Meshtastic short name field when available.
+- Nodes without custom icon/emoji codepoints now draw a colored round badge with a compact short-name label instead of the generic radio icon.
+- Badge fallback uses the short name first, then a cleaned long-name/ID fallback such as `3618`, `CC94`, or `TULL`.
+
+## 0.1.104 - 2026-07-30
+
+- Draws the fetched custom node-name symbols as fixed pixel masks instead of compressed line glyphs.
+- Prioritizes nodes with custom UTF-8 icon codepoints at the top of the Node List so they are visible during testing.
+- Keeps the fetched Wii `GUI.config` preserved; this build changes rendering only.
+
+## 0.1.103 - 2026-07-30
+
+- Uses the fetched real node-name UTF-8 evidence (`U+1F426 U+200D U+2B1B U+1F99E U+1F5FC`) to render multiple custom avatar glyphs in one Node List icon tile.
+- Adds explicit Wii-side glyphs for the received bird, lobster, and tower codepoints, while skipping ZWJ/black-square sequence glue.
+- Node List diagnostics now summarize recognized icon sequences instead of only the first codepoint.
+
+## 0.1.102 - 2026-07-30
+
+- Adds UTF-8 node-name diagnostics so `debug.log` reports emoji/codepoint values like `U+1F4E1` when Meshtastic node names include icons.
+- Adds GitHub-style colon alias recognition such as `:house:`, `:satellite:`, `:bell:`, `:lock:`, `:car:`, and related groups.
+- Temporarily shows recognized node icon codepoints on the Node List as `icon U+...` to confirm what WiiMesh is seeing from the radio.
+
+## 0.1.101 - 2026-07-30
+
+- Expands the WiiMesh custom emoji/avatar icon font using the GitHub emoji cheat sheet groups as a guide.
+- Adds grouped pictogram support for faces, people, weather, plants, creatures, devices, radio, locks, messages, map pins, vehicles, media, tools, mail/docs, hearts, stars, alerts, and questions.
+- Skips variation selectors and skin-tone modifiers when picking the first icon from a Meshtastic node name.
+
+## 0.1.100 - 2026-07-30
+
+- Starts a real WiiMesh-owned emoji/avatar icon font for Meshtastic user names instead of relying on the Wii console font.
+- Node cards now parse UTF-8 emoji/icon codepoints from node names and draw matching Wii-side pictograms for home, radio, bell, chat, map, key, lock, nodes, mobile, signal, and unknown icons.
+- Keeps text fallback tags for screens that still use console text, while Node List gets graphical avatar rendering.
+
+## 0.1.99 - 2026-07-30
+
+- Reworks Node List into Meshtastic-style stacked node cards with colored radio glyphs.
+- Shows each node with a short display label, full/long name, node ID-driven selection, and compact right-side status text.
+- Keeps `A` for opening chat, Up/Down for node selection after focus, and `2` for Node Options.
+
+## 0.1.98 - 2026-07-30
+
+- Tightens text clipping so content/footer text respects the actual configured panel width.
+- Shortens the Home dashboard into a calmer summary view with fewer visible rows.
+- Reduces footer/help text length to avoid fighting the lower screen panel.
+
+## 0.1.97 - 2026-07-30
+
+- Adds focus mode for primary menu screens: Up/Down moves the menu until `A` is pressed, then Up/Down scrolls/selects inside the active screen and `B` returns to menu navigation.
+- Pads every console-rendered line to its allowed width so old text does not remain outside panels when shorter text redraws.
+- Adds graphical row/card backgrounds and a focused content outline to make the interface read more like an app dashboard.
+- Makes the Home dashboard scrollable instead of overflowing below the content window.
+
+## 0.1.96 - 2026-07-30
+
+- Adds a 7-minute idle screen saver based on the earlier Mvskoke Party Wii behavior.
+- Screen saver shows the Meshtastic device/user name, or node ID/WiiMesh fallback, in a bouncing box to reduce burn-in risk.
+- Any Wii Remote button wakes the screen saver; HOME exits only after the saver is dismissed.
+
+## 0.1.95 - 2026-07-30
+
+- Adds UTF-8 emoji/icon cleanup for node names, sender names, messages, ticker text, and debug previews.
+- Maps common Meshtastic-style name icons to Wii-safe tags such as `[home]`, `[radio]`, `[bell]`, `[chat]`, `[map]`, `[lock]`, `[key]`, `[signal]`, and `[mobile]`.
+- Falls back unknown emoji/avatar glyphs to `[icon]` instead of drawing raw UTF-8 garbage on the Wii console font.
+
+## 0.1.94 - 2026-07-30
+
+- Splits the node area into a Meshtastic-style Node List and a separate Node Options view.
+- Node List now shows online/known node counts, selectable node rows, node IDs, names, and chat availability.
+- Adds a Filter/Highlight Node Options placeholder page reachable with `2` from Node List.
+- Keeps custom user PNG menu icons compiled into `boot.dol` during normal builds.
+
+## 0.1.93 - 2026-07-30
+
+- Reworks the Home submenu into a Meshtastic UI-style status list with messages, online nodes, time/date, radio/channel, signal, power, air utilization, bell, GPS, network, and build rows.
+- Parses RAK serial-console telemetry/status lines for online node count, battery, voltage, channel utilization, air utilization, SNR, and RSSI when firmware logs provide them.
+- Keeps the fetched/saved Wii-side `GUI.config` untouched.
+
+## 0.1.92 - 2026-07-30
+
+- Rebuilds `boot.dol` with edited icon PNGs from `Z:/art/AI/Wii icons`.
+- Maps the source `setting.png` file into WiiMesh's expected `settings.png` icon slot.
+
+## 0.1.91 - 2026-07-30
+
+- Adds editable PNG assets for every dashboard menu icon and the unread bell.
+- Compiles `assets/ui_icons/*.png` into `include/wiimesh/generated/MenuIcons.h` during `make`.
+- Adds `tools/build_with_output_icons.bat` so edited `outputs/ui_icons/*.png` files can be synced and built into `boot.dol`.
+- Updates FTPii deploy so normal uploads sync edited `outputs/ui_icons/*.png` before compiling `boot.dol`.
+
+## 0.1.90 - 2026-07-30
+
+- Shrinks the dashboard menu icons so labels have more room below them.
+- Makes the `menu` zone height control vertical icon spacing in the Wii placement editor.
+- Keeps the fetched/saved `GUI.config` untouched while changing the built-in menu rendering.
 
 ## 0.1.89 - 2026-07-30
 

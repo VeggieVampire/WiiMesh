@@ -13,7 +13,7 @@ if not exist "%ROOT%\Makefile" if exist "%SCRIPT_DIR%..\boot.dol" (
   set "ROOT=%SCRIPT_DIR%..\work\WiiMesh"
 )
 set "WII_IP=%~1"
-if "%WII_IP%"=="" set "WII_IP=192.168.0.13"
+if "%WII_IP%"=="" set "WII_IP=192.168.0.42"
 set "WII_DEVICE=%~2"
 if "%WII_DEVICE%"=="" set "WII_DEVICE=sd"
 set "UPLOAD_LAYOUT=0"
@@ -38,6 +38,7 @@ set "PREFETCH_PREFIX=%PREFETCH_DIR%\%STAMP%_%WII_IP%_%WII_DEVICE%_%APP_SLUG%"
 >> "%LOG%" echo Wii device: %WII_DEVICE%
 >> "%LOG%" echo Target folder: /%WII_DEVICE%/apps/%APP_SLUG%/
 >> "%LOG%" echo Preserve GUI.config: yes
+>> "%LOG%" echo Preserve Settings.config: yes
 >> "%LOG%" echo Upload MeshLayout.config: %UPLOAD_LAYOUT%
 >> "%LOG%" echo Upload theme background: %UPLOAD_THEME%
 >> "%LOG%" echo.
@@ -118,6 +119,16 @@ if errorlevel 1 (
 )
 >> "%LOG%" echo Remote GUI.config is preserved. This script never uploads GUI.config.
 
+curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/Settings.config" -o "%PREFETCH_PREFIX%_Settings.config" >> "%LOG%" 2>&1
+if errorlevel 1 curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/settings.config" -o "%PREFETCH_PREFIX%_Settings.config" >> "%LOG%" 2>&1
+if errorlevel 1 (
+  >> "%LOG%" echo No existing Settings.config found before upload.
+  if exist "%PREFETCH_PREFIX%_Settings.config" del "%PREFETCH_PREFIX%_Settings.config" >nul 2>nul
+) else (
+  echo Saved previous Settings config: %PREFETCH_PREFIX%_Settings.config
+)
+>> "%LOG%" echo Remote Settings.config is preserved. This script never uploads Settings.config.
+
 curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/MeshLayout.config" -o "%PREFETCH_PREFIX%_MeshLayout.config" >> "%LOG%" 2>&1
 if errorlevel 1 curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/MESHLAYOUT.CONFIG" -o "%PREFETCH_PREFIX%_MeshLayout.config" >> "%LOG%" 2>&1
 if errorlevel 1 (
@@ -129,6 +140,19 @@ if errorlevel 1 (
 >> "%LOG%" echo Remote MeshLayout.config is preserved unless --upload-layout is passed.
 
 if exist "%ROOT%\Makefile" (
+  if exist "%SCRIPT_DIR%ui_icons" (
+    echo Syncing edited UI icons from "%SCRIPT_DIR%ui_icons"...
+    >> "%LOG%" echo Sync UI icons from "%SCRIPT_DIR%ui_icons" to "%ROOT%\assets\ui_icons"
+    if not exist "%ROOT%\assets\ui_icons" mkdir "%ROOT%\assets\ui_icons" >nul 2>nul
+    copy /Y "%SCRIPT_DIR%ui_icons\*.png" "%ROOT%\assets\ui_icons\" >> "%LOG%" 2>&1
+    if errorlevel 1 (
+      echo UI icon sync failed. Nothing uploaded.
+      >> "%LOG%" echo ERROR: UI icon sync failed.
+      exit /b 1
+    )
+  ) else (
+    >> "%LOG%" echo No edited UI icons folder at "%SCRIPT_DIR%ui_icons"; using project assets.
+  )
   echo Building WiiMesh...
   >> "%LOG%" echo Running make...
   pushd "%ROOT%"

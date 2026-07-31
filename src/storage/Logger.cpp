@@ -49,12 +49,15 @@ void Logger::close() {
 
 bool Logger::openUdpTarget(const std::string &targetIp, unsigned short port, std::string *statusOut) {
     udpPort_ = port;
+    targetIp_ = targetIp;
+    localIp_.clear();
 #if defined(WIIMESH_WII)
     char localIp[16] = {};
     char netmask[16] = {};
     char gateway[16] = {};
     s32 init = net_init();
     s32 cfg = if_config(localIp, netmask, gateway, true, 20);
+    localIp_ = localIp;
     if (cfg < 0) {
         if (statusOut) {
             char line[64];
@@ -109,6 +112,7 @@ bool Logger::openUdpTarget(const std::string &targetIp, unsigned short port, std
     }
     return true;
 #else
+    targetIp_ = targetIp;
     if (statusOut) {
         *statusOut = "udp unavailable on host";
     }

@@ -11,7 +11,7 @@ sock.sendto((line + "\n").encode("utf-8"), (host, port))
 print(f"sent {line} to {host}:{port}")
 sock.settimeout(2.0)
 try:
-    data, addr = sock.recvfrom(512)
+    data, addr = sock.recvfrom(65535)
     print(f"reply from {addr[0]}:{addr[1]}: {data.decode('utf-8', 'replace').strip()}")
 except socket.timeout:
     print("no UDP command reply")

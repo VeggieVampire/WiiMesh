@@ -2,7 +2,7 @@
 setlocal
 
 set "WII_IP=%~1"
-if "%WII_IP%"=="" set "WII_IP=192.168.0.13"
+if "%WII_IP%"=="" set "WII_IP=192.168.0.42"
 set "LAYOUT=%~2"
 if "%LAYOUT%"=="" set "LAYOUT=%CD%\MeshLayout.config"
 
