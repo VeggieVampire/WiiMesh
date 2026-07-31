@@ -3,8 +3,10 @@ setlocal
 
 set "SCRIPT_DIR=%~dp0"
 set "ROOT=%SCRIPT_DIR%.."
-set "LOG=%SCRIPT_DIR%github_update.log"
+set "LOG=%ROOT%\..\..\outputs\github_update.log"
 set "MSG_FILE=%TEMP%\wiimesh_github_commit_msg.txt"
+
+if not exist "%ROOT%\..\..\outputs" mkdir "%ROOT%\..\..\outputs" >nul 2>nul
 
 > "%LOG%" echo WiiMesh GitHub update log
 >> "%LOG%" echo Started: %DATE% %TIME%
@@ -39,8 +41,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$section = $lines[$start..($end - 1)];" ^
   "$title = ($section[0] -replace '^##\s*','').Trim();" ^
   "$subject = 'Update WiiMesh to ' + (($title -split '\s+')[0]);" ^
-  "$body = @($subject, '', ($section -join [Environment]::NewLine));" ^
-  "Set-Content -Path '%MSG_FILE%' -Value $body -Encoding UTF8" >> "%LOG%" 2>&1
+  "$body = @($subject, '', ($section -join [Environment]::NewLine)) -join [Environment]::NewLine;" ^
+  "$utf8 = New-Object System.Text.UTF8Encoding($false);" ^
+  "[System.IO.File]::WriteAllText('%MSG_FILE%', $body, $utf8)" >> "%LOG%" 2>&1
 if errorlevel 1 (
   popd
   echo Could not create commit message from CHANGELOG.md.
