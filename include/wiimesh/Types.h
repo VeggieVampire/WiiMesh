@@ -6,7 +6,7 @@
 
 namespace wiimesh {
 
-constexpr const char *AppVersion = "0.1.139";
+constexpr const char *AppVersion = "0.1.172";
 constexpr uint32_t BroadcastNode = 0xffffffffu;
 constexpr int MaxMessages = 100;
 constexpr int MaxDebugPackets = 80;
@@ -46,10 +46,43 @@ struct Message {
     uint32_t rxTime = 0;
     uint8_t channelIndex = 0;
     bool direct = false;
+    bool outgoing = false;
+    bool delivered = false;
     std::string senderName;
     std::string senderId;
     std::string channelName;
     std::string text;
+};
+
+struct PendingText {
+    uint32_t to = 0;
+    uint8_t channelIndex = 0;
+    bool direct = true;
+    bool saveToChat = false;
+    std::string text;
+};
+
+struct MeshFileTransfer {
+    std::string filename;
+    std::string senderId;
+    uint32_t sender = 0;
+    uint32_t started = 0;
+    uint32_t updated = 0;
+    int totalChunks = 0;
+    int receivedChunks = 0;
+    bool complete = false;
+    bool saved = false;
+    bool base64 = false;
+    bool autoplayTried = false;
+    std::string savedPath;
+    std::vector<std::string> chunks;
+};
+
+enum class KeyboardMode {
+    Lowercase,
+    Uppercase,
+    Symbols,
+    UnicodeBadges
 };
 
 struct NodeSummary {
@@ -102,7 +135,7 @@ struct AppState {
     std::string usbStatus = "Scanning USB";
     std::string usbDetail;
     std::string logStatus = "log pending";
-    std::string netStatus = "IP/UDP off; press +";
+    std::string netStatus = "IP/UDP off; Settings Wii IP";
     std::string wiiIp = "offline";
     std::string udpTargetIp;
     std::string meshDeviceIp = "unknown";
@@ -116,6 +149,7 @@ struct AppState {
     std::vector<ChannelSummary> channels;
     std::vector<UsbDeviceInfo> usbDevices;
     std::vector<Message> messages;
+    uint32_t messageRevision = 0;
     int scrollOffset = 0;
     int uiTab = 0;
     int transitionTicks = 0;
@@ -128,6 +162,15 @@ struct AppState {
     int selectedSettingsIndex = 0;
     int selectedScreensaverIndex = 0;
     int selectedFontIndex = 0;
+    int selectedGuiOptionIndex = 0;
+    int selectedMidiIndex = 0;
+    int midiCommand = 0;
+    bool midiRepeat = false;
+    bool midiPlaying = false;
+    int midiFramesRemaining = 0;
+    std::string midiNowPlaying;
+    std::string midiStatus = "No MIDI loaded";
+    std::vector<std::string> midiFiles;
     int screensaverMode = 0;
     int screensaverSpeed = 2;
     int fontStyle = 1;
@@ -146,11 +189,20 @@ struct AppState {
     std::string chatPeerNodeId;
     std::string chatPeerName = "No contact";
     std::string composeText;
+    KeyboardMode keyboardMode = KeyboardMode::Lowercase;
+    bool keyboardShiftActive = false;
+    bool keyboardCapsLockActive = false;
+    size_t composeCursorPosition = 0;
+    std::vector<std::string> recentKeyboardWords;
     std::string pendingSendText;
     uint32_t pendingSendTo = 0;
+    std::vector<PendingText> pendingTexts;
+    std::vector<MeshFileTransfer> meshFiles;
+    uint32_t meshFileRevision = 0;
     bool showDiagnostics = false;
     bool showCalibration = false;
     bool debugEnabled = false;
+    bool menuEnabled[6] = {true, true, true, true, true, true};
     bool networkRequested = false;
     bool networkReady = false;
     uint32_t txBytes = 0;

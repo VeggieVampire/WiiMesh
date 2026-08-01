@@ -1,6 +1,11 @@
 import socket
 import sys
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except AttributeError:
+    pass
+
 host = sys.argv[1] if len(sys.argv) > 1 else "192.168.0.13"
 command = " ".join(sys.argv[2:]) if len(sys.argv) > 2 else "PING"
 port = 44016

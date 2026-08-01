@@ -18,10 +18,19 @@ set "WII_DEVICE=%~2"
 if "%WII_DEVICE%"=="" set "WII_DEVICE=sd"
 set "UPLOAD_LAYOUT=0"
 set "UPLOAD_THEME=0"
+set "FTP_ACTIVE=0"
 if /I "%~3"=="--upload-layout" set "UPLOAD_LAYOUT=1"
 if /I "%~3"=="--upload-theme" set "UPLOAD_THEME=1"
+if /I "%~3"=="--active" set "FTP_ACTIVE=1"
 if /I "%~4"=="--upload-layout" set "UPLOAD_LAYOUT=1"
 if /I "%~4"=="--upload-theme" set "UPLOAD_THEME=1"
+if /I "%~5"=="--upload-layout" set "UPLOAD_LAYOUT=1"
+if /I "%~5"=="--upload-theme" set "UPLOAD_THEME=1"
+if /I "%~5"=="--active" set "FTP_ACTIVE=1"
+if /I "%~6"=="--upload-layout" set "UPLOAD_LAYOUT=1"
+if /I "%~6"=="--upload-theme" set "UPLOAD_THEME=1"
+if /I "%~6"=="--active" set "FTP_ACTIVE=1"
+if /I "%~4"=="--active" set "FTP_ACTIVE=1"
 set "FTP_URL=ftp://%WII_IP%/"
 set "APP_SLUG=wii-mesh"
 set "LOG=%~dp0ftp.log"
@@ -29,6 +38,12 @@ set "STAMP=%DATE:~-4%%DATE:~4,2%%DATE:~7,2%_%TIME:~0,2%%TIME:~3,2%%TIME:~6,2%"
 set "STAMP=%STAMP: =0%"
 set "PREFETCH_DIR=%~dp0logs_before_upload"
 set "PREFETCH_PREFIX=%PREFETCH_DIR%\%STAMP%_%WII_IP%_%WII_DEVICE%_%APP_SLUG%"
+set "CURL_BASE=--disable-epsv --connect-timeout 5 --speed-time 15 --speed-limit 1"
+if "%FTP_ACTIVE%"=="1" set "CURL_BASE=--ftp-port - --connect-timeout 5 --speed-time 15 --speed-limit 1"
+set "CURL_LIST=%CURL_BASE% --max-time 20"
+set "CURL_GET=%CURL_BASE% --max-time 35"
+set "CURL_UPLOAD=%CURL_BASE% --max-time 120 --retry 1 --retry-delay 1 --retry-all-errors"
+
 
 > "%LOG%" echo WiiMesh FTP upload log
 >> "%LOG%" echo Started: %DATE% %TIME%
@@ -41,6 +56,7 @@ set "PREFETCH_PREFIX=%PREFETCH_DIR%\%STAMP%_%WII_IP%_%WII_DEVICE%_%APP_SLUG%"
 >> "%LOG%" echo Preserve Settings.config: yes
 >> "%LOG%" echo Upload MeshLayout.config: %UPLOAD_LAYOUT%
 >> "%LOG%" echo Upload theme background: %UPLOAD_THEME%
+>> "%LOG%" echo Active FTP mode: %FTP_ACTIVE%
 >> "%LOG%" echo.
 echo FTP log: %LOG%
 if not exist "%PREFETCH_DIR%" mkdir "%PREFETCH_DIR%" >nul 2>nul
@@ -56,7 +72,7 @@ echo.
 echo Waiting for FTPii at %WII_IP%...
 for /L %%I in (1,1,20) do (
   >> "%LOG%" echo Readiness attempt %%I: curl --list-only "%FTP_URL%"
-  curl --connect-timeout 2 --max-time 4 --silent --show-error --list-only "%FTP_URL%" >> "%LOG%" 2>&1
+  curl --disable-epsv --connect-timeout 2 --max-time 4 --silent --show-error --list-only "%FTP_URL%" >> "%LOG%" 2>&1
   if not errorlevel 1 goto ftp_ready
   echo   FTPii not ready yet. Attempt %%I of 20...
   >> "%LOG%" echo FTPii not ready on attempt %%I.
@@ -75,7 +91,7 @@ echo FTPii ready. Pulling existing WiiMesh logs before upload...
 >> "%LOG%" echo FTPii ready.
 >> "%LOG%" echo Prefetch directory: %PREFETCH_DIR%
 
-curl --fail --list-only "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/" -o "%PREFETCH_PREFIX%_listing.txt" >> "%LOG%" 2>&1
+curl %CURL_LIST% --fail --list-only "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/" -o "%PREFETCH_PREFIX%_listing.txt" >> "%LOG%" 2>&1
 if errorlevel 1 (
   >> "%LOG%" echo No existing remote app folder listing found before upload.
   if exist "%PREFETCH_PREFIX%_listing.txt" del "%PREFETCH_PREFIX%_listing.txt" >nul 2>nul
@@ -83,7 +99,7 @@ if errorlevel 1 (
   echo Saved previous remote listing: %PREFETCH_PREFIX%_listing.txt
 )
 
-curl --fail --list-only "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/" -o "%PREFETCH_PREFIX%_theme_listing.txt" >> "%LOG%" 2>&1
+curl %CURL_LIST% --fail --list-only "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/" -o "%PREFETCH_PREFIX%_theme_listing.txt" >> "%LOG%" 2>&1
 if errorlevel 1 (
   >> "%LOG%" echo No existing remote theme folder listing found before upload.
   if exist "%PREFETCH_PREFIX%_theme_listing.txt" del "%PREFETCH_PREFIX%_theme_listing.txt" >nul 2>nul
@@ -91,8 +107,8 @@ if errorlevel 1 (
   echo Saved previous theme listing: %PREFETCH_PREFIX%_theme_listing.txt
 )
 
-curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/debug.log" -o "%PREFETCH_PREFIX%_debug.log" >> "%LOG%" 2>&1
-if errorlevel 1 curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/DEBUG.LOG" -o "%PREFETCH_PREFIX%_debug.log" >> "%LOG%" 2>&1
+curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/debug.log" -o "%PREFETCH_PREFIX%_debug.log" >> "%LOG%" 2>&1
+if errorlevel 1 curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/DEBUG.LOG" -o "%PREFETCH_PREFIX%_debug.log" >> "%LOG%" 2>&1
 if errorlevel 1 (
   >> "%LOG%" echo No existing debug.log found before upload.
   if exist "%PREFETCH_PREFIX%_debug.log" del "%PREFETCH_PREFIX%_debug.log" >nul 2>nul
@@ -100,8 +116,8 @@ if errorlevel 1 (
   echo Saved previous debug log: %PREFETCH_PREFIX%_debug.log
 )
 
-curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/messages.dat" -o "%PREFETCH_PREFIX%_messages.dat" >> "%LOG%" 2>&1
-if errorlevel 1 curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/MESSAGES.DAT" -o "%PREFETCH_PREFIX%_messages.dat" >> "%LOG%" 2>&1
+curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/messages.dat" -o "%PREFETCH_PREFIX%_messages.dat" >> "%LOG%" 2>&1
+if errorlevel 1 curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/MESSAGES.DAT" -o "%PREFETCH_PREFIX%_messages.dat" >> "%LOG%" 2>&1
 if errorlevel 1 (
   >> "%LOG%" echo No existing messages.dat found before upload.
   if exist "%PREFETCH_PREFIX%_messages.dat" del "%PREFETCH_PREFIX%_messages.dat" >nul 2>nul
@@ -109,8 +125,8 @@ if errorlevel 1 (
   echo Saved previous messages: %PREFETCH_PREFIX%_messages.dat
 )
 
-curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/GUI.config" -o "%PREFETCH_PREFIX%_GUI.config" >> "%LOG%" 2>&1
-if errorlevel 1 curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/gui.config" -o "%PREFETCH_PREFIX%_GUI.config" >> "%LOG%" 2>&1
+curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/GUI.config" -o "%PREFETCH_PREFIX%_GUI.config" >> "%LOG%" 2>&1
+if errorlevel 1 curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/gui.config" -o "%PREFETCH_PREFIX%_GUI.config" >> "%LOG%" 2>&1
 if errorlevel 1 (
   >> "%LOG%" echo No existing GUI.config found before upload.
   if exist "%PREFETCH_PREFIX%_GUI.config" del "%PREFETCH_PREFIX%_GUI.config" >nul 2>nul
@@ -119,8 +135,8 @@ if errorlevel 1 (
 )
 >> "%LOG%" echo Remote GUI.config is preserved. This script never uploads GUI.config.
 
-curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/Settings.config" -o "%PREFETCH_PREFIX%_Settings.config" >> "%LOG%" 2>&1
-if errorlevel 1 curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/settings.config" -o "%PREFETCH_PREFIX%_Settings.config" >> "%LOG%" 2>&1
+curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/Settings.config" -o "%PREFETCH_PREFIX%_Settings.config" >> "%LOG%" 2>&1
+if errorlevel 1 curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/settings.config" -o "%PREFETCH_PREFIX%_Settings.config" >> "%LOG%" 2>&1
 if errorlevel 1 (
   >> "%LOG%" echo No existing Settings.config found before upload.
   if exist "%PREFETCH_PREFIX%_Settings.config" del "%PREFETCH_PREFIX%_Settings.config" >nul 2>nul
@@ -129,8 +145,8 @@ if errorlevel 1 (
 )
 >> "%LOG%" echo Remote Settings.config is preserved. This script never uploads Settings.config.
 
-curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/MeshLayout.config" -o "%PREFETCH_PREFIX%_MeshLayout.config" >> "%LOG%" 2>&1
-if errorlevel 1 curl --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/MESHLAYOUT.CONFIG" -o "%PREFETCH_PREFIX%_MeshLayout.config" >> "%LOG%" 2>&1
+curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/MeshLayout.config" -o "%PREFETCH_PREFIX%_MeshLayout.config" >> "%LOG%" 2>&1
+if errorlevel 1 curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/MESHLAYOUT.CONFIG" -o "%PREFETCH_PREFIX%_MeshLayout.config" >> "%LOG%" 2>&1
 if errorlevel 1 (
   >> "%LOG%" echo No existing theme/MeshLayout.config found before upload.
   if exist "%PREFETCH_PREFIX%_MeshLayout.config" del "%PREFETCH_PREFIX%_MeshLayout.config" >nul 2>nul
@@ -197,19 +213,19 @@ for %%F in ("%OUT_DIR%boot.dol") do (
 echo Uploading WiiMesh to FTPii at %WII_IP%/%WII_DEVICE%/apps/%APP_SLUG%...
 
 >> "%LOG%" echo Upload boot.dol to "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/boot.dol"
-curl --verbose --fail --ftp-create-dirs -T "%OUT_DIR%boot.dol" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/boot.dol" >> "%LOG%" 2>&1
+curl %CURL_UPLOAD% --verbose --fail --ftp-create-dirs -T "%OUT_DIR%boot.dol" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/boot.dol" >> "%LOG%" 2>&1
 if errorlevel 1 goto upload_failed
 
 >> "%LOG%" echo Verify remote app folder listing:
-curl --fail --list-only "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/" >> "%LOG%" 2>&1
+curl %CURL_LIST% --fail --list-only "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/" >> "%LOG%" 2>&1
 
 >> "%LOG%" echo Upload meta.xml to "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/meta.xml"
-curl --verbose --fail --ftp-create-dirs -T "%OUT_DIR%meta.xml" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/meta.xml" >> "%LOG%" 2>&1
+curl %CURL_UPLOAD% --verbose --fail --ftp-create-dirs -T "%OUT_DIR%meta.xml" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/meta.xml" >> "%LOG%" 2>&1
 if errorlevel 1 goto upload_failed
 
 if exist "%ROOT%\assets\icon.png" (
   >> "%LOG%" echo Upload icon.png to "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/icon.png"
-  curl --verbose --fail --ftp-create-dirs -T "%ROOT%\assets\icon.png" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/icon.png" >> "%LOG%" 2>&1
+  curl %CURL_UPLOAD% --verbose --fail --ftp-create-dirs -T "%ROOT%\assets\icon.png" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/icon.png" >> "%LOG%" 2>&1
   if errorlevel 1 goto upload_failed
 ) else (
   >> "%LOG%" echo No icon.png found; skipping icon upload.
@@ -225,7 +241,7 @@ if "%UPLOAD_THEME%"=="1" (
       echo Local theme background size: %%~zF bytes
     )
     >> "%LOG%" echo Upload theme background to "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/background.rgb565"
-    curl --verbose --fail --ftp-create-dirs -T "%THEME_BG%" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/background.rgb565" >> "%LOG%" 2>&1
+    curl %CURL_UPLOAD% --verbose --fail --ftp-create-dirs -T "%THEME_BG%" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/background.rgb565" >> "%LOG%" 2>&1
     if errorlevel 1 goto upload_failed
   ) else (
     >> "%LOG%" echo No theme background found; using built-in GUI skin.
@@ -241,7 +257,7 @@ if "%LAYOUT_CONFIG%"=="" if exist "%OUT_DIR%MeshLayout.config" set "LAYOUT_CONFI
 if "%UPLOAD_LAYOUT%"=="1" (
   if not "%LAYOUT_CONFIG%"=="" (
     >> "%LOG%" echo Upload MeshLayout.config to "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/MeshLayout.config"
-    curl --verbose --fail --ftp-create-dirs -T "%LAYOUT_CONFIG%" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/MeshLayout.config" >> "%LOG%" 2>&1
+    curl %CURL_UPLOAD% --verbose --fail --ftp-create-dirs -T "%LAYOUT_CONFIG%" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/theme/MeshLayout.config" >> "%LOG%" 2>&1
     if errorlevel 1 goto upload_failed
   ) else (
     >> "%LOG%" echo No MeshLayout.config found; using built-in layout.
@@ -251,7 +267,7 @@ if "%UPLOAD_LAYOUT%"=="1" (
 )
 
 >> "%LOG%" echo Upload debug-target.txt to "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/debug-target.txt"
-curl --verbose --fail --ftp-create-dirs -T "%OUT_DIR%debug-target.txt" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/debug-target.txt" >> "%LOG%" 2>&1
+curl %CURL_UPLOAD% --verbose --fail --ftp-create-dirs -T "%OUT_DIR%debug-target.txt" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/debug-target.txt" >> "%LOG%" 2>&1
 if errorlevel 1 goto upload_failed
 
 echo.

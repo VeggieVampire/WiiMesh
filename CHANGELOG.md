@@ -2,6 +2,221 @@
 
 All notable WiiMesh test-build changes are tracked here so real-Wii testing does not depend on chat history.
 
+## 0.1.172 - 2026-08-01
+
+- Adds a Settings -> GUI Options page for enabling/disabling side-menu buttons.
+- Persists menu button visibility, font settings, screensaver settings, debug toggle, pointer toggle, and MIDI repeat in `GUI.config`.
+- Keeps old `GUI.config` placement files compatible; missing option keys default to the current visible menu.
+- Makes side-menu D-pad and pointer navigation skip disabled buttons.
+- Wires UDP layout reload/set/save back into the active `GUI.config` path.
+
+## 0.1.171 - 2026-08-01
+
+- Adds a visible `MIDI / FILES` Settings row that opens the MIDI player and saved MeshFile transfer folder without enabling Wii IP.
+- Shows MeshFile and MIDI status directly on the Home panel even when the separate MIDI card is hidden by a compact layout.
+- Adds MIDI/Files status to the text fallback Settings screen.
+
+## 0.1.170 - 2026-08-01
+
+- Stops the Wii network/IP/UDP stack from starting from the global `+` shortcut.
+- Keeps IP/UDP fully off at boot unless the Settings Wii IP action is selected.
+- Updates footer/status text so testers know Wii IP is enabled from Settings instead of the main UI.
+
+## 0.1.169 - 2026-08-01
+
+- Fixes the on-screen keyboard radio badge key to insert the real Unicode `U+1F4FB` UTF-8 character instead of the visible `:radio:` fallback text.
+- Adds Unicode-aware compose cursor movement and Backspace so badge characters are removed as one logical character.
+- Draws the compose preview with the existing Unicode badge renderer so supported badges appear as graphics.
+- Reworks keyboard rows so suggestions no longer overlap control keys.
+- Keeps one visible wide `Space` key and moves Shift, Caps, Mode, cursor, Back, and Enter into the bottom control row.
+
+## 0.1.168 - 2026-08-01
+
+- Fixes the keyboard bug where normal letter keys were inserted as word suggestions with automatic spaces.
+- Adds typed keyboard actions so characters, suggestions, emoji badges, Space, Backspace, and Enter use separate code paths.
+- Starts the keyboard in lowercase mode and adds mode cycling: `abc -> ABC -> 123 -> Emoji`.
+- Adds Shift, Caps, symbols, cursor left/right, Clear, Cancel, Backspace, and Enter keys.
+- Reuses the existing emoji badge/icon rendering and inserts badge alias tokens without automatic spaces.
+- Makes Backspace and cursor movement treat inserted badge aliases as one logical item.
+
+## 0.1.167 - 2026-07-31
+
+- Changes the compose keyboard to a standard QWERTY-style layout.
+- Keeps only one top suggestion row for most-used words.
+- Removes the extra default-word rows so letters remain visible.
+- Makes suggestion keys wider and skips spacer cells during D-pad/pointer navigation.
+
+## 0.1.166 - 2026-07-31
+
+- Adds a Home-screen MIDI player card for saved MeshFile MIDI transfers.
+- Adds a MIDI player submenu opened from Home with `2`.
+- Supports selecting saved `.mid`/`.midi` files, `A` to play, `1` to stop, and `2` to toggle repeat.
+- Scans `sd:/apps/wii-mesh/received_files/` for MIDI files and updates after new MeshFile saves.
+- Persists the MIDI repeat setting in `Settings.config`.
+
+## 0.1.165 - 2026-07-31
+
+- Restricts MeshFile transfer commands to direct messages only; channel/Main-chat transfer commands are logged and ignored.
+- Adds base64 MeshFile chunk support for binary test files such as MIDI.
+- Saves decoded binary transfers to `sd:/apps/wii-mesh/received_files/`.
+- Adds a small MIDI parser/synth path that autoplays completed `.mid`/`.midi` transfers on Wii audio.
+- Adds a PC helper to generate a tiny MIDI and the exact direct-chat MeshFile strings for Chrome testing.
+
+## 0.1.164 - 2026-07-31
+
+- Adds receive-side MeshFile text-transfer support using `[START]`, `[CHUNK]`, and `[END]` messages from `VeggieVampire/MeshFile`.
+- Queues per-chunk confirmation texts back to the sender.
+- Saves completed transfers under `sd:/apps/wii-mesh/received_files/`.
+- Shows compact MeshFile status in Home/live layout data and keeps large chunk payloads compact in chat.
+
+## 0.1.163 - 2026-07-31
+
+- Changes the keyboard top row from most-recent words to most-used words.
+- Counts words from sent text and saved chat messages, then ranks them by frequency for the shortcut row.
+- Keeps the normal letter keyboard below the single most-used-words row.
+
+## 0.1.162 - 2026-07-31
+
+- Limits recent keyboard words to only the first keyboard row.
+- Restores the normal `A` through `Z` keys below the recent-word row.
+- Fixes the keyboard builder so one-letter keys are no longer filtered out as invalid words.
+
+## 0.1.161 - 2026-07-31
+
+- Fixes open direct-chat scrolling so `Up` moves to older messages and `Down` returns toward newer messages.
+- Adds a visible chat range counter like `1-4/7` in chat detail to confirm how many messages the active conversation matched.
+- Uses one shared visible-count helper for chat detail drawing and D-pad scroll limits.
+
+## 0.1.160 - 2026-07-31
+
+- Stops chat names/messages from showing the literal `[icon]` placeholder when a Meshtastic short name contains an emoji/icon.
+- Draws the selected direct-chat node badge in the chat header so the contact icon appears as graphics instead of text.
+- Cleans node-list-to-chat naming so emoji-only short names fall back to long name or node ID for text labels.
+
+## Script update - 2026-07-31
+
+- Adds curl FTP data-transfer timeouts to deploy and log-fetch scripts so FTPii passive data socket hangs fail instead of freezing indefinitely.
+- Disables EPSV for FTPii because FTPii reports `502 Command not implemented` before falling back to PASV.
+- Adds optional `--active` mode to deploy/fetch scripts for testing active FTP if passive PASV data ports keep hanging.
+
+## 0.1.159 - 2026-07-31
+
+- Adds a recent-word keyboard list built from sent text and recent received messages.
+- Places recently used words before canned words and letter keys instead of limiting the top row to a few fixed shortcuts.
+- Adds keyboard paging hints and keeps pointer hit boxes aligned with the currently visible key page.
+
+## 0.1.158 - 2026-07-31
+
+- Restores Meshtastic user badges on inactive direct chats by reusing the Node List avatar renderer in the Chats list.
+- Keeps inactive chat badges visible with a dimmed border instead of dropping back to a plain/no badge look.
+
+## 0.1.157 - 2026-07-31
+
+- Fixes active direct-chat naming so the open chat prefers the known Meshtastic long name instead of showing a raw `!nodeid`.
+- Uses short name as the second fallback when opening a chat from the node list.
+- Replaces the direct-chat header's raw node ID label with `DIRECT` so the contact name area stays readable.
+
+## 0.1.156 - 2026-07-31
+
+- Adds scrolling inside the open chat detail view when a conversation has more than four messages.
+- Shows `NEWER ^` and `OLDER v` hints inside chat detail when messages are hidden.
+- Restores newest-at-top ordering for the chat detail view.
+- Sorts the main Chats list by latest activity and shows `MORE ^` / `MORE v` when hidden chat rows exist.
+
+## 0.1.155 - 2026-07-31
+
+- Fixes chat bubble ordering so the newest message appears at the bottom.
+- Bottom-aligns the visible chat stack like a normal conversation view.
+
+## 0.1.154 - 2026-07-31
+
+- Adds explicit outgoing and delivered state to saved messages.
+- Draws local sent chat bubbles with a gray check mark while pending.
+- Marks the latest matching outgoing message delivered when a Meshtastic routing/status packet arrives, turning the check green.
+
+## 0.1.153 - 2026-07-31
+
+- Adds hold-to-repeat for Wii Remote D-pad movement after a short delay.
+- Applies repeat movement to menu navigation, list scrolling, node/chat selection, keyboard cursor movement, and placement-editor move/resize controls.
+- Keeps action buttons one-shot so holding `A`, `B`, `1`, `2`, or `HOME` does not spam actions.
+
+## 0.1.152 - 2026-07-31
+
+- Fixes Wii UI keyboard direct-message sends so successful sends immediately add a local `[sent]` chat bubble.
+- Marks UI-sent messages dirty so they are saved to `messages.dat` like UDP-sent messages.
+- Confirms live `0.1.151` receive state over UDP showed real direct text from `MacnCheeseNoodles` again.
+
+## 0.1.151 - 2026-07-31
+
+- Restores the old working receive rule from `0.1.51`: firmware-console `TEXT_MESSAGE_APP` sightings stay in Stream/Debug only until a real framed payload arrives.
+- Filters saved routing ACK/status rows out of `messages.dat` on load/save so old ACK pollution no longer appears as chat.
+- Fixes the UDP command helper so `LIVE_DATA` replies containing emoji/UTF-8 text print correctly on Windows.
+
+## 0.1.150 - 2026-07-31
+
+- Fixes send/receive separation for serial console fallback text packets.
+- Stops outbound phone/Wii-side `TEXT_MESSAGE_APP` console notices from being counted as received messages.
+- Keeps routing ACK packets in debug/status instead of adding fake chat rows to the message list.
+
+## 0.1.149 - 2026-07-31
+
+- Enlarges the chat keyboard keys for Wii Remote pointer use and D-pad navigation.
+- Changes the chat keyboard from 7 narrow columns to 6 wider columns.
+- Keeps pointer hit boxes matched to the drawn key boxes.
+
+## 0.1.148 - 2026-07-31
+
+- Fixes Wii Remote pointer clicks on the chat keyboard so clicking a visible key presses that key instead of the old D-pad cursor key.
+- Gives pointer keyboard clicks their own status text for debugging key hit boxes.
+
+## 0.1.147 - 2026-07-31
+
+- Restores a visible message fallback when Meshtastic firmware logs a decoded `TEXT_MESSAGE_APP` but no framed payload follows.
+- Makes direct chat detail matching accept either sender or recipient node ID so saved direct messages do not disappear from the open chat.
+- Keeps the larger node/chat badges from 0.1.146.
+
+## 0.1.146 - 2026-07-31
+
+- Doubles Node List badge/card size so Meshtastic user badges are readable, with fewer rows and normal scrolling.
+- Enlarges direct chat badges and chat rows so chat identities match the node list better.
+- Resolves direct chat list and opened chat names through known node long names instead of showing node IDs when node info is available.
+
+## 0.1.145 - 2026-07-31
+
+- Moves dashboard menu labels into a full 16px text lane so `NODE` no longer clips into `NUDE`.
+- Moves graphical section underlines below the libogc 8x16 font instead of through the letters.
+- Gives Settings, Font, Screensaver, and Node Options rows enough vertical room for the fixed console font.
+
+## 0.1.144 - 2026-07-31
+
+- Stops regenerating the UI text font during normal builds.
+- Keeps the ftpii/libogc-style console font as a fixed checked-in WiiMesh asset.
+- Leaves build-time generation only for dashboard/menu badges and Meshtastic emoji badge atlases.
+
+## 0.1.143 - 2026-07-31
+
+- Switches the WiiMesh graphical text atlas to libogc's 8x16 console font, matching the font approach used by ftpii.
+- Replaces the Windows TrueType rounded font generator with a console-font generator so glyphs are fixed-width and TV-safe.
+- Keeps the Font Debug sheet for checking the exact ftpii-style character set on real hardware.
+
+## 0.1.142 - 2026-07-31
+
+- Rebuilds the rounded UI font with a clearer rounded source font and more glyph spacing.
+- Removes the extra blur pass that made small characters smear together on TV output.
+- Keeps the Font Debug sheet for checking every printable character on real Wii hardware.
+
+## 0.1.141 - 2026-07-31
+
+- Adds a Placement Editor entry under Settings so GUI placement is reachable without remembering the `-` shortcut.
+- Adds a Font Debug sheet that displays printable ASCII characters using the active font style and size.
+- Preserves lowercase and printable punctuation in the rounded UI font renderer for better photo-based glyph tuning.
+
+## 0.1.140 - 2026-07-31
+
+- Rebuilds the graphical UI font as a generated rounded anti-aliased bitmap atlas.
+- Replaces square block text rendering with alpha-blended rounded glyphs for Wii graphics screens.
+- Adds `outputs/rounded_font_preview.png` during builds so the font can be checked outside the Wii.
+
 ## 0.1.139 - 2026-07-31
 
 - Adds live `sd:/apps/wii-mesh/Settings.config` support for font, screensaver, debug, and pointer settings.

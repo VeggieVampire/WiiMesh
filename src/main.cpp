@@ -6,13 +6,19 @@
 #include "wiimesh/Ui.h"
 #include "wiimesh/UsbTransport.h"
 
+#include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstdint>
 #include <ctime>
+#include <dirent.h>
 #include <string>
+#include <vector>
 
 #if defined(WIIMESH_WII)
+#include <asndlib.h>
 #include <fat.h>
 #include <network.h>
 #include <ogcsys.h>
@@ -25,6 +31,7 @@ using namespace wiimesh;
 static const char *AppDir = "sd:/apps/wii-mesh";
 static const char *ThemeDir = "sd:/apps/wii-mesh/theme";
 static const char *MapTilesDir = "sd:/apps/wii-mesh/maps";
+static const char *MeshFilesDir = "sd:/apps/wii-mesh/received_files";
 static const char *DebugLogPath = "sd:/apps/wii-mesh/debug.log";
 static const char *MessagesPath = "sd:/apps/wii-mesh/messages.dat";
 static const char *MapPath = "sd:/apps/wii-mesh/mesh_map.dat";
@@ -97,6 +104,8 @@ static bool applySettingsLine(AppState &state, const std::string &rawLine, std::
         state.debugEnabled = parseBoolValue(value);
     } else if (key == "pointer.enabled") {
         state.pointerEnabled = parseBoolValue(value);
+    } else if (key == "midi.repeat") {
+        state.midiRepeat = parseBoolValue(value);
     } else {
         if (message) *message = "unknown setting " + key;
         return false;
@@ -115,6 +124,7 @@ static std::string settingsExport(const AppState &state) {
     out += "screensaver.speed=" + std::to_string(state.screensaverSpeed) + "\n";
     out += "debug.enabled=" + std::to_string(state.debugEnabled ? 1 : 0) + "\n";
     out += "pointer.enabled=" + std::to_string(state.pointerEnabled ? 1 : 0) + "\n";
+    out += "midi.repeat=" + std::to_string(state.midiRepeat ? 1 : 0) + "\n";
     return out;
 }
 
@@ -297,11 +307,14 @@ static void addLocalSentMessage(AppState &state, uint32_t to, const char *text, 
     msg.rxTime = static_cast<uint32_t>(std::time(nullptr));
     msg.channelIndex = 0;
     msg.direct = direct;
+    msg.outgoing = true;
+    msg.delivered = false;
     msg.senderName = "Me";
     msg.senderId = state.myNodeId;
     msg.channelName = state.channelName;
-    msg.text = std::string("[sent] ") + text;
+    msg.text = text;
     state.messages.push_back(msg);
+    state.messageRevision++;
     while (static_cast<int>(state.messages.size()) > MaxMessages) {
         state.messages.erase(state.messages.begin());
     }
@@ -341,6 +354,9 @@ static const char *uiTabName(int tab) {
     case 10: return "NODE_TOOLS";
     case 11: return "SCREENSAVER_SETTINGS";
     case 12: return "FONT_SETTINGS";
+    case 13: return "FONT_DEBUG";
+    case 14: return "MIDI_PLAYER";
+    case 15: return "GUI_OPTIONS";
     default: return "UNKNOWN";
     }
 }
@@ -405,6 +421,13 @@ static std::string liveLayoutSample(const AppState &state) {
            " TX " + std::to_string(state.txBytes) +
            " Nodes " + std::to_string(state.nodeCount) +
            " Text " + std::to_string(state.textMessageCount) + "\n";
+    if (!state.meshFiles.empty()) {
+        const MeshFileTransfer &transfer = state.meshFiles.back();
+        out += "files.text=Files | " + oneLine(transfer.filename) + " | " +
+               std::to_string(transfer.receivedChunks) + "/" +
+               std::to_string(transfer.totalChunks) + " | ";
+        out += transfer.saved ? "saved\n" : (transfer.complete ? "complete\n" : "receiving\n");
+    }
     return out;
 }
 
@@ -441,6 +464,401 @@ static bool saveMeshMap(const char *path, const AppState &state) {
     const size_t wrote = std::fwrite(map.data(), 1, map.size(), f);
     std::fclose(f);
     return wrote == map.size();
+}
+
+static bool endsWithIgnoreCase(const std::string &text, const char *suffix) {
+    const size_t n = std::strlen(suffix);
+    if (text.size() < n) return false;
+    for (size_t i = 0; i < n; ++i) {
+        const char a = static_cast<char>(std::tolower(static_cast<unsigned char>(text[text.size() - n + i])));
+        const char b = static_cast<char>(std::tolower(static_cast<unsigned char>(suffix[i])));
+        if (a != b) return false;
+    }
+    return true;
+}
+
+static int base64Value(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return -1;
+}
+
+static bool decodeBase64(const std::string &text, std::vector<uint8_t> &out) {
+    int val = 0;
+    int bits = -8;
+    out.clear();
+    for (char c : text) {
+        if (c == '=') break;
+        if (c == '\r' || c == '\n' || c == ' ' || c == '\t') continue;
+        const int v = base64Value(c);
+        if (v < 0) return false;
+        val = (val << 6) | v;
+        bits += 6;
+        if (bits >= 0) {
+            out.push_back(static_cast<uint8_t>((val >> bits) & 0xff));
+            bits -= 8;
+        }
+    }
+    return true;
+}
+
+static bool meshFileBytes(const MeshFileTransfer &transfer, std::vector<uint8_t> &out) {
+    out.clear();
+    if (transfer.base64) {
+        std::string joined;
+        for (std::string chunk : transfer.chunks) {
+            if (chunk.rfind("b64:", 0) == 0) chunk.erase(0, 4);
+            joined += chunk;
+        }
+        return decodeBase64(joined, out);
+    }
+    for (const auto &chunk : transfer.chunks) {
+        out.insert(out.end(), chunk.begin(), chunk.end());
+    }
+    return true;
+}
+
+#if defined(WIIMESH_WII)
+constexpr int MidiSampleRate = 32000;
+constexpr int MidiMaxSeconds = 20;
+constexpr int MidiMaxSamples = MidiSampleRate * MidiMaxSeconds;
+static s16 gMidiPcm[MidiMaxSamples] ATTRIBUTE_ALIGN(32);
+
+struct MidiNote {
+    uint32_t startTick = 0;
+    uint32_t endTick = 0;
+    uint8_t note = 60;
+    uint8_t velocity = 90;
+};
+
+static uint16_t be16(const std::vector<uint8_t> &data, size_t off) {
+    return static_cast<uint16_t>((data[off] << 8) | data[off + 1]);
+}
+
+static uint32_t be32(const std::vector<uint8_t> &data, size_t off) {
+    return (static_cast<uint32_t>(data[off]) << 24) |
+           (static_cast<uint32_t>(data[off + 1]) << 16) |
+           (static_cast<uint32_t>(data[off + 2]) << 8) |
+           static_cast<uint32_t>(data[off + 3]);
+}
+
+static bool readMidiVar(const std::vector<uint8_t> &data, size_t end, size_t &pos, uint32_t &value) {
+    value = 0;
+    for (int i = 0; i < 4 && pos < end; ++i) {
+        const uint8_t b = data[pos++];
+        value = (value << 7) | (b & 0x7f);
+        if ((b & 0x80) == 0) return true;
+    }
+    return false;
+}
+
+static bool parseMidiNotes(const std::vector<uint8_t> &data, std::vector<MidiNote> &notes,
+                           uint16_t &division, uint32_t &tempoUs) {
+    notes.clear();
+    division = 480;
+    tempoUs = 500000;
+    if (data.size() < 14 || std::memcmp(data.data(), "MThd", 4) != 0) return false;
+    const uint32_t headerLen = be32(data, 4);
+    if (headerLen < 6 || 8 + headerLen > data.size()) return false;
+    division = be16(data, 12);
+    if ((division & 0x8000) != 0 || division == 0) return false;
+    size_t pos = 8 + headerLen;
+    while (pos + 8 <= data.size()) {
+        if (std::memcmp(&data[pos], "MTrk", 4) != 0) break;
+        const size_t trackEnd = std::min(data.size(), pos + 8 + be32(data, pos + 4));
+        pos += 8;
+        uint32_t tick = 0;
+        uint8_t running = 0;
+        uint32_t activeStart[128] = {};
+        uint8_t activeVelocity[128] = {};
+        while (pos < trackEnd && notes.size() < 256) {
+            uint32_t delta = 0;
+            if (!readMidiVar(data, trackEnd, pos, delta)) break;
+            tick += delta;
+            if (pos >= trackEnd) break;
+            uint8_t status = data[pos++];
+            if (status < 0x80) {
+                if (running == 0) break;
+                --pos;
+                status = running;
+            } else if (status < 0xf0) {
+                running = status;
+            }
+            if (status == 0xff) {
+                if (pos >= trackEnd) break;
+                const uint8_t type = data[pos++];
+                uint32_t len = 0;
+                if (!readMidiVar(data, trackEnd, pos, len) || pos + len > trackEnd) break;
+                if (type == 0x51 && len == 3 && tick == 0) {
+                    tempoUs = (static_cast<uint32_t>(data[pos]) << 16) |
+                              (static_cast<uint32_t>(data[pos + 1]) << 8) |
+                              static_cast<uint32_t>(data[pos + 2]);
+                }
+                pos += len;
+            } else if (status == 0xf0 || status == 0xf7) {
+                uint32_t len = 0;
+                if (!readMidiVar(data, trackEnd, pos, len) || pos + len > trackEnd) break;
+                pos += len;
+            } else {
+                const uint8_t op = status & 0xf0;
+                const int dataLen = (op == 0xc0 || op == 0xd0) ? 1 : 2;
+                if (pos + dataLen > trackEnd) break;
+                const uint8_t a = data[pos++];
+                const uint8_t b = dataLen == 2 ? data[pos++] : 0;
+                if (a < 128 && (op == 0x90 || op == 0x80)) {
+                    if (op == 0x90 && b > 0) {
+                        activeStart[a] = tick;
+                        activeVelocity[a] = b;
+                    } else if (activeVelocity[a] > 0) {
+                        notes.push_back({activeStart[a], tick > activeStart[a] ? tick : activeStart[a] + division / 4, a, activeVelocity[a]});
+                        activeVelocity[a] = 0;
+                    }
+                }
+            }
+        }
+        for (int n = 0; n < 128 && notes.size() < 256; ++n) {
+            if (activeVelocity[n] > 0) {
+                notes.push_back({activeStart[n], activeStart[n] + division / 2, static_cast<uint8_t>(n), activeVelocity[n]});
+            }
+        }
+        pos = trackEnd;
+    }
+    return !notes.empty();
+}
+
+static bool playMidiBytes(const std::vector<uint8_t> &bytes, Logger &logger, int *framesOut = nullptr) {
+    std::vector<MidiNote> notes;
+    uint16_t division = 0;
+    uint32_t tempoUs = 0;
+    if (!parseMidiNotes(bytes, notes, division, tempoUs)) {
+        logger.line("MeshFile MIDI parse failed");
+        return false;
+    }
+    const double secondsPerTick = (tempoUs / 1000000.0) / static_cast<double>(division);
+    uint32_t lastTick = 0;
+    for (const auto &note : notes) lastTick = std::max(lastTick, note.endTick);
+    int sampleCount = static_cast<int>(lastTick * secondsPerTick * MidiSampleRate) + MidiSampleRate / 2;
+    sampleCount = std::max(1, std::min(sampleCount, MidiMaxSamples));
+    std::memset(gMidiPcm, 0, sizeof(gMidiPcm));
+    for (const auto &note : notes) {
+        const int start = std::max(0, std::min(sampleCount, static_cast<int>(note.startTick * secondsPerTick * MidiSampleRate)));
+        const int end = std::max(start + 1, std::min(sampleCount, static_cast<int>(note.endTick * secondsPerTick * MidiSampleRate)));
+        const double freq = 440.0 * std::pow(2.0, (static_cast<int>(note.note) - 69) / 12.0);
+        const int period = std::max(2, static_cast<int>(MidiSampleRate / freq));
+        const int amp = 800 + static_cast<int>(note.velocity) * 34;
+        for (int i = start; i < end; ++i) {
+            const int wave = ((i - start) % period) < (period / 2) ? amp : -amp;
+            int mixed = static_cast<int>(gMidiPcm[i]) + wave;
+            mixed = std::max(-30000, std::min(30000, mixed));
+            gMidiPcm[i] = static_cast<s16>(mixed);
+        }
+    }
+    DCFlushRange(gMidiPcm, sampleCount * sizeof(s16));
+    ASND_SetVoice(1, VOICE_MONO_16BIT, MidiSampleRate, 0, gMidiPcm,
+                  static_cast<u32>(sampleCount * sizeof(s16)), 210, 210, nullptr);
+    if (framesOut) {
+        *framesOut = std::max(20, static_cast<int>((sampleCount * 60 + MidiSampleRate - 1) / MidiSampleRate) + 8);
+    }
+    logger.line("MeshFile MIDI autoplay notes " + std::to_string(notes.size()) +
+                " samples " + std::to_string(sampleCount));
+    return true;
+}
+
+static void stopMidiVoice() {
+    ASND_StopVoice(1);
+}
+#endif
+
+static bool autoplayMeshFileIfNeeded(AppState &state, MeshFileTransfer &transfer, const std::vector<uint8_t> &bytes, Logger &logger) {
+    if (transfer.autoplayTried) return false;
+    if (!endsWithIgnoreCase(transfer.filename, ".mid") && !endsWithIgnoreCase(transfer.filename, ".midi")) return false;
+    transfer.autoplayTried = true;
+#if defined(WIIMESH_WII)
+    int frames = 0;
+    const bool ok = playMidiBytes(bytes, logger, &frames);
+    if (ok) {
+        state.midiPlaying = true;
+        state.midiFramesRemaining = frames;
+        state.midiNowPlaying = transfer.filename;
+        state.midiStatus = "Autoplay " + transfer.filename;
+    }
+    logger.line(std::string("MeshFile MIDI autoplay ") + (ok ? "ok " : "failed ") + transfer.filename);
+    return ok;
+#else
+    logger.line("MeshFile MIDI autoplay skipped on non-Wii " + transfer.filename);
+    return false;
+#endif
+}
+
+static bool saveCompletedMeshFiles(AppState &state, Logger &logger) {
+    bool savedAny = false;
+    mkdir(MeshFilesDir, 0777);
+    for (auto &transfer : state.meshFiles) {
+        if (!transfer.complete || transfer.saved || transfer.filename.empty() ||
+            transfer.totalChunks <= 0 || transfer.receivedChunks != transfer.totalChunks) {
+            continue;
+        }
+        const std::string path = std::string(MeshFilesDir) + "/" + transfer.filename;
+        std::vector<uint8_t> bytes;
+        if (!meshFileBytes(transfer, bytes)) {
+            state.usbStatus = "MeshFile decode failed";
+            state.usbDetail = transfer.filename;
+            logger.line("MeshFile base64 decode failed " + transfer.filename);
+            continue;
+        }
+        FILE *f = std::fopen(path.c_str(), "wb");
+        if (!f) {
+            state.usbStatus = "MeshFile save failed";
+            state.usbDetail = transfer.filename;
+            logger.line("MeshFile save open failed " + path);
+            continue;
+        }
+        const bool ok = bytes.empty() || std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size();
+        std::fclose(f);
+        if (ok) {
+            transfer.saved = true;
+            transfer.savedPath = path;
+            savedAny = true;
+            state.usbStatus = "MeshFile saved";
+            state.usbDetail = transfer.filename + " saved";
+            logger.line("MeshFile saved " + path + " bytes " + std::to_string(bytes.size()) +
+                        (transfer.base64 ? " base64" : " text"));
+            if (autoplayMeshFileIfNeeded(state, transfer, bytes, logger)) {
+                state.usbStatus = "MIDI autoplay";
+                state.usbDetail = transfer.filename;
+            }
+        } else {
+            state.usbStatus = "MeshFile save failed";
+            state.usbDetail = transfer.filename;
+            logger.line("MeshFile save write failed " + path);
+        }
+    }
+    return savedAny;
+}
+
+static void scanMidiFiles(AppState &state) {
+    std::vector<std::string> files;
+    DIR *dir = opendir(MeshFilesDir);
+    if (dir) {
+        while (dirent *entry = readdir(dir)) {
+            const std::string name = entry->d_name;
+            if (endsWithIgnoreCase(name, ".mid") || endsWithIgnoreCase(name, ".midi")) {
+                files.push_back(name);
+            }
+        }
+        closedir(dir);
+    }
+    std::sort(files.begin(), files.end());
+    state.midiFiles = files;
+    if (state.selectedMidiIndex >= static_cast<int>(state.midiFiles.size())) {
+        state.selectedMidiIndex = state.midiFiles.empty() ? 0 : static_cast<int>(state.midiFiles.size()) - 1;
+    }
+    if (state.midiFiles.empty() && !state.midiPlaying) {
+        state.midiStatus = "No MIDI files saved";
+    } else if (!state.midiPlaying && state.midiStatus == "No MIDI loaded") {
+        state.midiStatus = "Ready";
+    }
+}
+
+static bool readWholeFile(const std::string &path, std::vector<uint8_t> &bytes) {
+    bytes.clear();
+    FILE *f = std::fopen(path.c_str(), "rb");
+    if (!f) return false;
+    std::fseek(f, 0, SEEK_END);
+    const long size = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (size < 0 || size > 1024 * 1024) {
+        std::fclose(f);
+        return false;
+    }
+    bytes.resize(static_cast<size_t>(size));
+    const bool ok = bytes.empty() || std::fread(bytes.data(), 1, bytes.size(), f) == bytes.size();
+    std::fclose(f);
+    return ok;
+}
+
+static bool playSelectedMidi(AppState &state, Logger &logger) {
+    scanMidiFiles(state);
+    if (state.midiFiles.empty()) {
+        state.midiPlaying = false;
+        state.midiStatus = "No MIDI files saved";
+        logger.line("MIDI player play failed; no files");
+        return false;
+    }
+    const int index = clampInt(state.selectedMidiIndex, 0, static_cast<int>(state.midiFiles.size()) - 1);
+    const std::string name = state.midiFiles[static_cast<size_t>(index)];
+    const std::string path = std::string(MeshFilesDir) + "/" + name;
+    std::vector<uint8_t> bytes;
+    if (!readWholeFile(path, bytes)) {
+        state.midiPlaying = false;
+        state.midiStatus = "Read failed " + name;
+        logger.line("MIDI player read failed " + path);
+        return false;
+    }
+#if defined(WIIMESH_WII)
+    int frames = 0;
+    const bool ok = playMidiBytes(bytes, logger, &frames);
+    if (ok) {
+        state.midiPlaying = true;
+        state.midiFramesRemaining = frames;
+        state.midiNowPlaying = name;
+        state.midiStatus = "Playing " + name;
+        logger.line("MIDI player play " + name + " frames " + std::to_string(frames));
+        return true;
+    }
+    state.midiPlaying = false;
+    state.midiFramesRemaining = 0;
+    state.midiStatus = "Parse failed " + name;
+    logger.line("MIDI player parse failed " + name);
+    return false;
+#else
+    state.midiPlaying = false;
+    state.midiStatus = "MIDI playback is Wii-only";
+    logger.line("MIDI player skipped on non-Wii " + name);
+    return false;
+#endif
+}
+
+static void stopMidi(AppState &state, Logger &logger) {
+#if defined(WIIMESH_WII)
+    stopMidiVoice();
+#endif
+    state.midiPlaying = false;
+    state.midiFramesRemaining = 0;
+    state.midiStatus = state.midiNowPlaying.empty() ? "Stopped" : "Stopped " + state.midiNowPlaying;
+    logger.line("MIDI player stop");
+}
+
+static void updateMidiPlayer(AppState &state, Logger &logger) {
+    if (state.midiCommand == 3) {
+        scanMidiFiles(state);
+        state.midiCommand = 0;
+    } else if (state.midiCommand == 1) {
+        playSelectedMidi(state, logger);
+        state.midiCommand = 0;
+    } else if (state.midiCommand == 2) {
+        stopMidi(state, logger);
+        state.midiCommand = 0;
+    } else if (state.midiCommand == 4) {
+        logger.line(std::string("MIDI player repeat ") + (state.midiRepeat ? "on" : "off"));
+        state.midiCommand = 0;
+    }
+    if (state.midiPlaying && state.midiFramesRemaining > 0) {
+        --state.midiFramesRemaining;
+        if (state.midiFramesRemaining == 0) {
+            if (state.midiRepeat) {
+                logger.line("MIDI player repeat restart " + state.midiNowPlaying);
+                playSelectedMidi(state, logger);
+            } else {
+                state.midiPlaying = false;
+                state.midiStatus = "Finished " + state.midiNowPlaying;
+                logger.line("MIDI player finished " + state.midiNowPlaying);
+            }
+        }
+    }
 }
 
 #if defined(WIIMESH_WII)
@@ -750,6 +1168,7 @@ int main() {
     mkdir(AppDir, 0777);
     mkdir(ThemeDir, 0777);
     mkdir(MapTilesDir, 0777);
+    mkdir(MeshFilesDir, 0777);
 #endif
 
     Ui ui;
@@ -774,10 +1193,11 @@ int main() {
     std::string udpStatus;
     std::string debugTarget = loadDebugTarget();
     state.udpTargetIp = debugTarget;
-    state.netStatus = std::string("IP/UDP off; + enables ") + debugTarget;
+    state.netStatus = std::string("IP/UDP off; enable Wii IP in Settings -> ") + debugTarget;
     logger.line(std::string("WiiMesh starting v") + AppVersion);
     logger.line("Settings " + settingsLoadStatus);
     state.logStatus = logger.status();
+    scanMidiFiles(state);
 
     MessageStore store;
     store.load(MessagesPath, state);
@@ -801,6 +1221,7 @@ int main() {
     bool logDrawResult = false;
     while (true) {
         ui.updateInput(state);
+        updateMidiPlayer(state, logger);
         if (state.fontStyle != lastLoggedFontStyle || state.fontSize != lastLoggedFontSize) {
             char line[96];
             std::snprintf(line, sizeof(line), "UI font style=%d size=%d", state.fontStyle, state.fontSize);
@@ -837,16 +1258,20 @@ int main() {
                     state.netStatus += " cmd 44016";
                 }
                 state.networkReady = true;
-                logger.line("Network enabled by + button");
+                logger.line("Network enabled from Settings Wii IP");
             } else {
                 state.networkRequested = false;
-                state.netStatus = udpStatus.empty() ? "udp init failed; press + retry" : udpStatus + "; press + retry";
+                state.netStatus = udpStatus.empty() ? "udp init failed; retry in Settings" : udpStatus + "; retry in Settings";
                 logger.line("Network enable failed: " + state.netStatus);
             }
             networkAttempting = false;
             state.logStatus = logger.status();
         }
+        const uint32_t beforeCommandMessages = state.messageRevision;
         pollCommandSocket(commandSocket, logger, transport, protocol, ui, state, sentStart, sentHeartbeat);
+        if (state.messageRevision != beforeCommandMessages) {
+            messagesDirty = true;
+        }
 #endif
 
         if (!transport.isOpen()) {
@@ -882,9 +1307,9 @@ int main() {
             }
         } else {
             if (sentStart) {
-                const size_t beforeMessages = state.messages.size();
+                const uint32_t beforeMessages = state.messageRevision;
                 protocol.poll(transport, state);
-                if (state.messages.size() != beforeMessages) {
+                if (state.messageRevision != beforeMessages) {
                     messagesDirty = true;
                 }
                 state.usbDetail = transport.lastError();
@@ -925,13 +1350,17 @@ int main() {
 
         if (!state.pendingSendText.empty()) {
             if (transport.isOpen() && sentStart && state.pendingSendTo != 0) {
+                const uint32_t sendTo = state.pendingSendTo;
+                const std::string sentText = state.pendingSendText;
                 const bool ok = protocol.sendText(transport, state.pendingSendTo, 0,
                                                   state.pendingSendText.c_str(), true);
                 if (ok) {
-                    state.txBytes += static_cast<uint32_t>(state.pendingSendText.size());
+                    state.txBytes += static_cast<uint32_t>(sentText.size());
                     state.usbStatus = "Reply queued";
+                    addLocalSentMessage(state, sendTo, sentText.c_str(), true);
+                    messagesDirty = true;
                     addStream(state, "Wii -> RAK UI DM queued");
-                    logger.line("UI reply queued to " + nodeId(state.pendingSendTo));
+                    logger.line("UI reply queued to " + nodeId(sendTo));
                     state.pendingSendText.clear();
                     state.pendingSendTo = 0;
                 } else {
@@ -946,6 +1375,36 @@ int main() {
                 state.pendingSendText.clear();
                 state.pendingSendTo = 0;
             }
+        }
+
+        if (!state.pendingTexts.empty()) {
+            PendingText pending = state.pendingTexts.front();
+            if (transport.isOpen() && sentStart && pending.to != 0) {
+                const bool ok = protocol.sendText(transport, pending.to, pending.channelIndex,
+                                                  pending.text.c_str(), pending.direct);
+                if (ok) {
+                    state.txBytes += static_cast<uint32_t>(pending.text.size());
+                    state.usbStatus = "MeshFile ACK queued";
+                    addStream(state, "Wii -> RAK MeshFile ACK " + nodeId(pending.to));
+                    logger.line("MeshFile ACK queued to " + nodeId(pending.to) + " " + pending.text);
+                    if (pending.saveToChat) {
+                        addLocalSentMessage(state, pending.to, pending.text.c_str(), pending.direct);
+                        messagesDirty = true;
+                    }
+                    state.pendingTexts.erase(state.pendingTexts.begin());
+                } else {
+                    state.usbStatus = "MeshFile ACK failed";
+                    logger.line("MeshFile ACK send failed to " + nodeId(pending.to));
+                    state.pendingTexts.erase(state.pendingTexts.begin());
+                }
+            } else if (pending.to == 0) {
+                state.pendingTexts.erase(state.pendingTexts.begin());
+            }
+        }
+
+        if (saveCompletedMeshFiles(state, logger)) {
+            addStream(state, "Wii saved MeshFile transfer");
+            scanMidiFiles(state);
         }
 
         if (messagesDirty && (ticks % 60) == 0) {

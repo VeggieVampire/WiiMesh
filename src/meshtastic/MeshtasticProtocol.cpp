@@ -2,10 +2,12 @@
 #include "wiimesh/ProtoReader.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <sstream>
 #if defined(WIIMESH_WII)
 #include <unistd.h>
 #endif
@@ -15,6 +17,142 @@ namespace wiimesh {
 constexpr uint32_t PortTextMessage = 1;
 constexpr uint32_t PortPosition = 3;
 constexpr uint32_t PortRouting = 5;
+
+static bool startsWith(const std::string &text, const char *prefix) {
+    const size_t n = std::strlen(prefix);
+    return text.size() >= n && text.compare(0, n, prefix) == 0;
+}
+
+static std::string lowerAscii(std::string s) {
+    for (char &c : s) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return s;
+}
+
+static bool isMeshFileCommand(const std::string &text) {
+    return startsWith(text, "[START] ") || startsWith(text, "[CHUNK] ") || startsWith(text, "[END] ");
+}
+
+static bool safeMeshFileName(const std::string &name) {
+    if (name.empty() || name.size() > 48) return false;
+    if (name == "." || name == "..") return false;
+    for (char c : name) {
+        const unsigned char uc = static_cast<unsigned char>(c);
+        if (std::isalnum(uc) || c == '.' || c == '_' || c == '-') continue;
+        return false;
+    }
+    return true;
+}
+
+static MeshFileTransfer &meshFileSlot(AppState &state, uint32_t sender, const std::string &filename) {
+    for (auto &transfer : state.meshFiles) {
+        if (transfer.sender == sender && transfer.filename == filename && !transfer.saved) return transfer;
+    }
+    MeshFileTransfer transfer;
+    transfer.filename = filename;
+    transfer.sender = sender;
+    transfer.senderId = nodeId(sender);
+    transfer.started = static_cast<uint32_t>(std::time(nullptr));
+    transfer.updated = transfer.started;
+    state.meshFiles.push_back(transfer);
+    while (state.meshFiles.size() > 8) {
+        state.meshFiles.erase(state.meshFiles.begin());
+    }
+    return state.meshFiles.back();
+}
+
+static bool processMeshFileText(AppState &state, uint32_t sender, const std::string &text, bool direct) {
+    const uint32_t now = static_cast<uint32_t>(std::time(nullptr));
+    if (!direct) {
+        state.usbStatus = "MeshFile ignored";
+        state.usbDetail = "Use direct chat only";
+        state.meshFileRevision++;
+        return true;
+    }
+    if (startsWith(text, "[START] ")) {
+        std::istringstream parts(text.substr(8));
+        std::string filename;
+        std::string mode;
+        if (!(parts >> filename)) return false;
+        if (!safeMeshFileName(filename)) return false;
+        MeshFileTransfer &transfer = meshFileSlot(state, sender, filename);
+        transfer.started = now;
+        transfer.updated = now;
+        transfer.complete = false;
+        transfer.saved = false;
+        transfer.base64 = false;
+        transfer.autoplayTried = false;
+        transfer.savedPath.clear();
+        transfer.chunks.clear();
+        transfer.receivedChunks = 0;
+        transfer.totalChunks = 0;
+        if (parts >> mode) {
+            const std::string lower = lowerAscii(mode);
+            transfer.base64 = lower == "b64" || lower == "base64";
+        }
+        state.usbStatus = "MeshFile started";
+        state.usbDetail = "Receiving " + filename;
+        state.meshFileRevision++;
+        return true;
+    }
+    if (startsWith(text, "[CHUNK] ")) {
+        std::istringstream parts(text.substr(8));
+        std::string chunkInfo;
+        std::string filename;
+        if (!(parts >> chunkInfo >> filename)) return false;
+        if (!safeMeshFileName(filename)) return false;
+        const size_t slash = chunkInfo.find('/');
+        if (slash == std::string::npos) return false;
+        const int chunkIndex = std::atoi(chunkInfo.substr(0, slash).c_str());
+        const int totalChunks = std::atoi(chunkInfo.substr(slash + 1).c_str());
+        if (chunkIndex < 1 || totalChunks < 1 || chunkIndex > totalChunks || totalChunks > 256) return false;
+        std::string chunkData;
+        std::getline(parts, chunkData);
+        if (!chunkData.empty() && chunkData.front() == ' ') chunkData.erase(chunkData.begin());
+
+        MeshFileTransfer &transfer = meshFileSlot(state, sender, filename);
+        if (transfer.totalChunks != totalChunks) {
+            transfer.totalChunks = totalChunks;
+            transfer.chunks.assign(static_cast<size_t>(totalChunks), std::string());
+            transfer.receivedChunks = 0;
+            transfer.complete = false;
+            transfer.saved = false;
+            transfer.savedPath.clear();
+        }
+        std::string &slot = transfer.chunks[static_cast<size_t>(chunkIndex - 1)];
+        if (slot.empty()) {
+            ++transfer.receivedChunks;
+        }
+        if (startsWith(chunkData, "b64:")) {
+            transfer.base64 = true;
+        }
+        slot = chunkData;
+        transfer.updated = now;
+        transfer.complete = transfer.receivedChunks == transfer.totalChunks;
+        state.usbStatus = transfer.complete ? "MeshFile complete" : "MeshFile receiving";
+        state.usbDetail = filename + " " + std::to_string(transfer.receivedChunks) +
+                          "/" + std::to_string(transfer.totalChunks);
+        state.pendingTexts.push_back({sender, 0, true, false,
+                                      filename + ": " + std::to_string(transfer.receivedChunks) +
+                                      "/" + std::to_string(transfer.totalChunks) + " confirmed"});
+        state.meshFileRevision++;
+        return true;
+    }
+    if (startsWith(text, "[END] ")) {
+        const std::string filename = text.substr(6);
+        if (!safeMeshFileName(filename)) return false;
+        MeshFileTransfer &transfer = meshFileSlot(state, sender, filename);
+        transfer.updated = now;
+        transfer.complete = transfer.totalChunks > 0 && transfer.receivedChunks == transfer.totalChunks;
+        state.usbStatus = transfer.complete ? "MeshFile ready to save" : "MeshFile missing chunks";
+        state.usbDetail = filename + " " + std::to_string(transfer.receivedChunks) +
+                          "/" + std::to_string(transfer.totalChunks);
+        state.meshFileRevision++;
+        return true;
+    }
+    return false;
+}
 
 struct WakeMode {
     const char *name;
@@ -59,6 +197,22 @@ static constexpr WakeMode WakeModes[] = {
     {"none", nullptr, 0},
     {"c3x32-plus-94x4", WakeC3x32Then94x4, sizeof(WakeC3x32Then94x4)},
 };
+
+static bool markLatestOutgoingDelivered(AppState &state, uint32_t peer) {
+    for (int i = static_cast<int>(state.messages.size()) - 1; i >= 0; --i) {
+        Message &m = state.messages[static_cast<size_t>(i)];
+        if (!m.outgoing || m.delivered) {
+            continue;
+        }
+        if (peer == 0 || m.to == peer || m.from == peer || m.to == BroadcastNode) {
+            m.delivered = true;
+            state.messageRevision++;
+            return true;
+        }
+    }
+    return false;
+}
+
 static std::string portName(uint32_t port) {
     switch (port) {
     case 0: return "UNKNOWN_APP";
@@ -633,6 +787,19 @@ void MeshtasticProtocol::parseConsoleLine(const std::string &line, AppState &sta
     parseHexField(line, "to=", to);
     parseHexField(line, "Ch=", channel);
 
+    const std::string fromId = nodeId(from);
+    const std::string toId = nodeId(to);
+    const bool fromThisWiiClient = from == 0 || from == myNode_ || fromId == state.myNodeId;
+    const bool toThisWiiClient = to != BroadcastNode && to != 0 && toId == state.myNodeId;
+    const bool consolePhoneSide =
+        line.find("PACKET FROM PHON") != std::string::npos ||
+        line.find("PACKET FROM PHONE") != std::string::npos ||
+        line.find("phone downloaded packet") != std::string::npos;
+    const bool consoleLooksInbound =
+        !consolePhoneSide &&
+        !fromThisWiiClient &&
+        (to == BroadcastNode || toThisWiiClient || state.myNodeId == "waiting");
+
     Message msg;
     msg.from = from;
     msg.to = to;
@@ -652,7 +819,9 @@ void MeshtasticProtocol::parseConsoleLine(const std::string &line, AppState &sta
     debug.dataFields = "fallback from firmware console log";
     debug.decoded = "Console saw a text packet, but the real payload requires a framed FromRadio.packet";
     addDebugPacket(state, debug);
-    addProtocolEvent(state, logger_, "console text packet from " + msg.senderId + "; waiting for framed payload");
+    addProtocolEvent(state, logger_, std::string(consoleLooksInbound ? "console inbound" : "console outbound/local") +
+                     " TEXT_MESSAGE_APP notice from " + msg.senderId +
+                     " to " + toId + "; waiting for framed payload");
 }
 
 void MeshtasticProtocol::recordRawFrame(const std::vector<uint8_t> &payload, AppState &state) {
@@ -1324,23 +1493,11 @@ void MeshtasticProtocol::parsePacket(const std::vector<uint8_t> &payload, AppSta
         return;
     }
     if (port == PortRouting) {
-        Message receipt;
-        receipt.from = msg.from;
-        receipt.to = msg.to;
-        receipt.rxTime = msg.rxTime;
-        receipt.channelIndex = msg.channelIndex;
-        receipt.direct = true;
-        receipt.senderId = nodeId(msg.from);
-        auto known = nodeNames_.find(msg.from);
-        receipt.senderName = known == nodeNames_.end() ? receipt.senderId : known->second;
-        receipt.channelName = "Routing";
-        receipt.text = "Routing/ACK packet received";
-        state.messages.push_back(receipt);
+        const bool delivered = markLatestOutgoingDelivered(state, msg.from);
         addProtocolEvent(state, logger_, "routing packet from " + nodeId(msg.from) +
-                         " decoded " + std::to_string(static_cast<unsigned>(decoded.size())));
-        while (static_cast<int>(state.messages.size()) > MaxMessages) {
-            state.messages.erase(state.messages.begin());
-        }
+                         " decoded " + std::to_string(static_cast<unsigned>(decoded.size())) +
+                         (delivered ? " delivery marked" : ""));
+        state.usbStatus = delivered ? "Message delivered" : "Routing/ACK received";
         return;
     }
     if (port != PortTextMessage || text.empty()) {
@@ -1359,9 +1516,18 @@ void MeshtasticProtocol::parsePacket(const std::vector<uint8_t> &payload, AppSta
     msg.senderName = known == nodeNames_.end() ? msg.senderId : known->second;
     auto channel = channels_.find(msg.channelIndex);
     msg.channelName = channel == channels_.end() || channel->second.empty() ? primaryFallbackName_ : channel->second;
+    const bool meshFileCommand = isMeshFileCommand(msg.text);
+    if (meshFileCommand && !msg.direct) {
+        processMeshFileText(state, msg.from, msg.text, false);
+        addProtocolEvent(state, logger_, "meshfile ignored channel command from " + msg.senderName);
+        addStreamEvent(state, logger_, "MeshFile ignored channel command; send direct to Wii user");
+        return;
+    }
+    const bool meshFileText = meshFileCommand && processMeshFileText(state, msg.from, msg.text, msg.direct);
     state.messages.push_back(msg);
+    state.messageRevision++;
     state.textMessageCount++;
-    addProtocolEvent(state, logger_, std::string(msg.direct ? "direct text " : "channel text ") +
+    addProtocolEvent(state, logger_, std::string(meshFileText ? "meshfile " : (msg.direct ? "direct text " : "channel text ")) +
                      msg.senderName + ": " + msg.text.substr(0, 40));
     while (static_cast<int>(state.messages.size()) > MaxMessages) {
         state.messages.erase(state.messages.begin());
