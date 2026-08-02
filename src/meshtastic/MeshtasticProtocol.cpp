@@ -23,6 +23,16 @@ static bool startsWith(const std::string &text, const char *prefix) {
     return text.size() >= n && text.compare(0, n, prefix) == 0;
 }
 
+static std::string trimText(std::string text) {
+    while (!text.empty() && (text.back() == '\r' || text.back() == '\n' || text.back() == ' ' || text.back() == '\t')) {
+        text.pop_back();
+    }
+    size_t start = 0;
+    while (start < text.size() && (text[start] == ' ' || text[start] == '\t')) ++start;
+    if (start > 0) text.erase(0, start);
+    return text;
+}
+
 static std::string lowerAscii(std::string s) {
     for (char &c : s) {
         c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -49,6 +59,15 @@ static MeshFileTransfer &meshFileSlot(AppState &state, uint32_t sender, const st
     for (auto &transfer : state.meshFiles) {
         if (transfer.sender == sender && transfer.filename == filename && !transfer.saved) return transfer;
     }
+    for (auto &transfer : state.meshFiles) {
+        if (transfer.filename == filename && !transfer.saved) {
+            if (transfer.sender == 0) {
+                transfer.sender = sender;
+                transfer.senderId = nodeId(sender);
+            }
+            return transfer;
+        }
+    }
     MeshFileTransfer transfer;
     transfer.filename = filename;
     transfer.sender = sender;
@@ -60,6 +79,11 @@ static MeshFileTransfer &meshFileSlot(AppState &state, uint32_t sender, const st
         state.meshFiles.erase(state.meshFiles.begin());
     }
     return state.meshFiles.back();
+}
+
+static void queueMeshFileAck(AppState &state, uint32_t to, const std::string &text) {
+    if (to == 0) return;
+    state.pendingTexts.push_back({to, 0, true, false, text});
 }
 
 static bool processMeshFileText(AppState &state, uint32_t sender, const std::string &text, bool direct) {
@@ -93,6 +117,7 @@ static bool processMeshFileText(AppState &state, uint32_t sender, const std::str
         }
         state.usbStatus = "MeshFile started";
         state.usbDetail = "Receiving " + filename;
+        queueMeshFileAck(state, sender, "[MFACK] " + filename + " START");
         state.meshFileRevision++;
         return true;
     }
@@ -133,14 +158,15 @@ static bool processMeshFileText(AppState &state, uint32_t sender, const std::str
         state.usbStatus = transfer.complete ? "MeshFile complete" : "MeshFile receiving";
         state.usbDetail = filename + " " + std::to_string(transfer.receivedChunks) +
                           "/" + std::to_string(transfer.totalChunks);
-        state.pendingTexts.push_back({sender, 0, true, false,
-                                      filename + ": " + std::to_string(transfer.receivedChunks) +
-                                      "/" + std::to_string(transfer.totalChunks) + " confirmed"});
+        queueMeshFileAck(state, sender, "[MFACK] " + filename + " CHUNK " +
+                         std::to_string(chunkIndex) + "/" + std::to_string(totalChunks) +
+                         " RX " + std::to_string(transfer.receivedChunks) + "/" +
+                         std::to_string(transfer.totalChunks));
         state.meshFileRevision++;
         return true;
     }
     if (startsWith(text, "[END] ")) {
-        const std::string filename = text.substr(6);
+        const std::string filename = trimText(text.substr(6));
         if (!safeMeshFileName(filename)) return false;
         MeshFileTransfer &transfer = meshFileSlot(state, sender, filename);
         transfer.updated = now;
@@ -148,6 +174,10 @@ static bool processMeshFileText(AppState &state, uint32_t sender, const std::str
         state.usbStatus = transfer.complete ? "MeshFile ready to save" : "MeshFile missing chunks";
         state.usbDetail = filename + " " + std::to_string(transfer.receivedChunks) +
                           "/" + std::to_string(transfer.totalChunks);
+        queueMeshFileAck(state, sender, "[MFACK] " + filename + " END " +
+                         std::string(transfer.complete ? "COMPLETE " : "MISSING ") +
+                         std::to_string(transfer.receivedChunks) + "/" +
+                         std::to_string(transfer.totalChunks));
         state.meshFileRevision++;
         return true;
     }

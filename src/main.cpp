@@ -832,6 +832,33 @@ static void stopMidi(AppState &state, Logger &logger) {
     logger.line("MIDI player stop");
 }
 
+static bool deleteSelectedMidi(AppState &state, Logger &logger) {
+    scanMidiFiles(state);
+    if (state.midiFiles.empty()) {
+        state.midiStatus = "No MIDI files to delete";
+        logger.line("MIDI player delete failed; no files");
+        return false;
+    }
+    const int index = clampInt(state.selectedMidiIndex, 0, static_cast<int>(state.midiFiles.size()) - 1);
+    const std::string name = state.midiFiles[static_cast<size_t>(index)];
+    const std::string path = std::string(MeshFilesDir) + "/" + name;
+    if (state.midiPlaying && state.midiNowPlaying == name) {
+        stopMidi(state, logger);
+    }
+    const bool ok = std::remove(path.c_str()) == 0;
+    if (ok) {
+        state.midiStatus = "Deleted " + name;
+        state.midiNowPlaying.clear();
+        logger.line("MIDI player deleted " + path);
+        scanMidiFiles(state);
+        return true;
+    }
+    state.midiStatus = "Delete failed " + name;
+    logger.line("MIDI player delete failed " + path);
+    scanMidiFiles(state);
+    return false;
+}
+
 static void updateMidiPlayer(AppState &state, Logger &logger) {
     if (state.midiCommand == 3) {
         scanMidiFiles(state);
@@ -844,6 +871,9 @@ static void updateMidiPlayer(AppState &state, Logger &logger) {
         state.midiCommand = 0;
     } else if (state.midiCommand == 4) {
         logger.line(std::string("MIDI player repeat ") + (state.midiRepeat ? "on" : "off"));
+        state.midiCommand = 0;
+    } else if (state.midiCommand == 5) {
+        deleteSelectedMidi(state, logger);
         state.midiCommand = 0;
     }
     if (state.midiPlaying && state.midiFramesRemaining > 0) {
@@ -1384,9 +1414,10 @@ int main() {
                                                   pending.text.c_str(), pending.direct);
                 if (ok) {
                     state.txBytes += static_cast<uint32_t>(pending.text.size());
-                    state.usbStatus = "MeshFile ACK queued";
-                    addStream(state, "Wii -> RAK MeshFile ACK " + nodeId(pending.to));
-                    logger.line("MeshFile ACK queued to " + nodeId(pending.to) + " " + pending.text);
+                    state.usbStatus = "MeshFile receipt sent";
+                    state.usbDetail = pending.text;
+                    addStream(state, "Wii -> RAK " + pending.text);
+                    logger.line("MeshFile receipt sent to " + nodeId(pending.to) + " " + pending.text);
                     if (pending.saveToChat) {
                         addLocalSentMessage(state, pending.to, pending.text.c_str(), pending.direct);
                         messagesDirty = true;

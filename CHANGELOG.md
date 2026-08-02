@@ -2,6 +2,70 @@
 
 All notable WiiMesh test-build changes are tracked here so real-Wii testing does not depend on chat history.
 
+## 0.1.183 - 2026-08-02
+
+- Replaces the bare chat-detail range counter with a clearer `MSG X-Y OF Z` label.
+- Leaves chat-list right-side values as timestamps for the latest activity in each chat.
+
+## 0.1.182 - 2026-08-02
+
+- Restores normal chat ordering so the newest message appears at the bottom of the conversation.
+- Keeps `Up` scrolling toward older messages and `Down` returning toward newer messages.
+- Applies the same oldest-to-newest order to the text fallback message/chat screens.
+
+## 0.1.181 - 2026-08-01
+
+- Plays the notification sound for any new incoming message, matching the unread bell icon.
+- Keeps sound silent for outgoing sends, MeshFile receipts, and saved-history loading at boot.
+
+## 0.1.180 - 2026-08-01
+
+- Splits the graphical header into fixed title, radio status, and Wii IP slots so `ONLINE` and the IP/UDP text no longer overlap.
+- Gives the ticker its own width with room reserved for the signal bars.
+- Separates the text-mode fallback header status and IP/UDP labels so they do not print over each other.
+
+## 0.1.179 - 2026-08-01
+
+- Fixes notification bell semantics so the icon only appears for unread incoming messages.
+- Stops outgoing sends, local messages, and MeshFile receipt replies from creating unread bell state.
+- Plays the bell sound only for incoming direct bell-alert messages, not messages sent by WiiMesh.
+- Updates home/chat/screensaver unread counts to use incoming message counts instead of total saved messages.
+
+## 0.1.178 - 2026-08-01
+
+- Adds a delete action to the MIDI player using the Wii Remote `-` button.
+- Deletes only the selected `.mid`/`.midi` file from `SD:/apps/wii-mesh/received_files`, stops playback first when deleting the currently playing file, and refreshes the file list afterward.
+- Updates graphical and text MIDI player help to show `- DELETE`.
+
+## 0.1.177 - 2026-08-01
+
+- Renders active-user screensaver entries as graphical badges with avatar/icon glyphs instead of console text.
+- Stops printing cleaned fallback labels like `[ICON]` over screensaver badges.
+- Uses the node-list icon extraction path for screensaver badges so emoji short names can display as real badge graphics.
+
+## 0.1.176 - 2026-08-01
+
+- Removes the filled screensaver text box in username/latest-message modes so the rectangle no longer appears to lag behind character-cell text.
+- Keeps the animated signal bars on the screensaver while making the moving text itself float directly on the background.
+
+## 0.1.175 - 2026-08-01
+
+- Adds explicit MeshFile receipt replies from WiiMesh: `[MFACK] filename START`, `[MFACK] filename CHUNK n/total`, and `[MFACK] filename END COMPLETE/MISSING`.
+- Uses those app-level replies to prove the Wii parsed each transfer stage instead of relying only on Meshtastic Web delivery icons.
+- Keeps MeshFile ACK replies direct-only and separate from public channel chats.
+
+## 0.1.174 - 2026-08-01
+
+- MeshFile transfer assembly now falls back to matching active transfers by filename when Meshtastic reports sender identity differently across direct START/CHUNK/END texts.
+- Trims `[END]` filenames before matching so CR/LF or trailing spaces do not create a separate empty transfer.
+- Live UDP testing showed direct MeshFile control messages arrive from Chrome/Meshtastic Web, but v0.1.173 left transfers at `0/0 receiving`; this patch targets that merge failure.
+
+## 0.1.173 - 2026-08-01
+
+- Fixes the Settings panel so compact/custom layouts scroll through all Settings rows instead of hiding the bottom entries.
+- Makes the `WII IP` row visible/selectable again from Settings, keeping IP/UDP disabled at boot and off the global `+` shortcut.
+- Updates pointer Settings selection to match the currently visible scrolled Settings rows.
+
 ## 0.1.172 - 2026-08-01
 
 - Adds a Settings -> GUI Options page for enabling/disabling side-menu buttons.
