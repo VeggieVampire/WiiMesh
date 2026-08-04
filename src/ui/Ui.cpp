@@ -50,7 +50,7 @@ constexpr int ScreenFontSettings = 12;
 constexpr int ScreenFontDebug = 13;
 constexpr int ScreenMidiPlayer = 14;
 constexpr int ScreenGuiOptions = 15;
-constexpr int SettingsRowCount = 10;
+constexpr int SettingsRowCount = 11;
 constexpr int GuiZoneCount = 5;
 constexpr int KeyboardCols = 10;
 constexpr int KeyboardSuggestionCount = 5;
@@ -3296,6 +3296,8 @@ void drawSettingsPanel(const AppState &state, int x, int y, int w, int h) {
         {"GUI OPTIONS", "OPEN", "Menu buttons and UI toggles"},
         {"MIDI / FILES", state.midiFiles.empty() ? "NO MIDI" : (std::to_string(static_cast<int>(state.midiFiles.size())) + " MIDI"),
          "A opens player and transfer folder"},
+        {"CLEAR MSGS", state.clearMessagesArmed ? "PRESS A AGAIN" : (std::to_string(static_cast<int>(state.messages.size())) + " SAVED"),
+         "Clears messages.dat and current chats"},
         {"WII IP", state.networkReady ? state.wiiIp : "OFF", "A starts Wii IP/UDP"},
     };
     const int count = static_cast<int>(sizeof(rows) / sizeof(rows[0]));
@@ -3675,11 +3677,6 @@ void drawChatPanel(const AppState &state, int x, int y, int w, int h) {
             }
             keyY += keyH + 5;
         }
-    } else {
-        fillRect(x + 18, y + h - 38, w - 36, 26, rgb565(12, 31, 41), 245);
-        strokeRect(x + 18, y + h - 38, w - 36, 26, rgb565(35, 99, 118));
-        drawTinyTextFit(channelChat ? "B BACK TO CHATS   CHANNEL VIEW" : "A TYPE DIRECT MESSAGE   B BACK",
-                        x + 28, y + h - 29, w - 56, 1, rgb565(77, 232, 141));
     }
 }
 
@@ -3710,6 +3707,10 @@ void drawGraphicalFooter(const AppState &state, int x, int y, int w, int h) {
     panel(x, y, w, h, false);
     const std::string help = state.composingMessage
         ? "KEYBOARD  D-PAD MOVE  A KEY/SEND  B CANCEL"
+        : state.uiTab == ScreenChatDetail && state.chatChannelIndex < 0
+        ? "FOCUSED  UP/DOWN SCROLL  A TYPE DIRECT MESSAGE  B BACK"
+        : state.uiTab == ScreenChatDetail
+        ? "FOCUSED  UP/DOWN SCROLL  B BACK TO CHATS"
         : state.dashboardFocused
         ? "FOCUSED  UP/DOWN SCROLL  A OPEN  B MENU"
         : "UP/DOWN MENU  A FOCUS  1 USB  - GRID";
@@ -4492,6 +4493,7 @@ void Ui::updateInput(AppState &state) {
             state.selectedChannelIndex--;
         } else if (state.uiTab == ScreenSettings && state.selectedSettingsIndex > 0) {
             state.selectedSettingsIndex--;
+            state.clearMessagesArmed = false;
         } else if (state.uiTab == ScreenScreensaverSettings && state.selectedScreensaverIndex > 0) {
             state.selectedScreensaverIndex--;
         } else if (state.uiTab == ScreenFontSettings && state.selectedFontIndex > 0) {
@@ -4526,6 +4528,7 @@ void Ui::updateInput(AppState &state) {
             saveGuiConfig(state);
         } else if (state.uiTab == ScreenSettings && state.selectedSettingsIndex + 1 < SettingsRowCount) {
             state.selectedSettingsIndex++;
+            state.clearMessagesArmed = false;
         } else if (state.uiTab == ScreenScreensaverSettings && state.selectedScreensaverIndex < 2) {
             state.selectedScreensaverIndex++;
         } else if (state.uiTab == ScreenFontSettings && state.selectedFontIndex < 2) {
@@ -4686,6 +4689,22 @@ void Ui::updateInput(AppState &state) {
                 state.dashboardFocused = true;
                 state.midiCommand = 3;
             } else if (state.selectedSettingsIndex == 9) {
+                if (state.clearMessagesArmed) {
+                    state.messages.clear();
+                    state.messageRevision++;
+                    state.textMessageCount = 0;
+                    state.selectedMessageIndex = 0;
+                    state.selectedChatIndex = 0;
+                    state.scrollOffset = 0;
+                    state.clearMessagesArmed = false;
+                    state.usbStatus = "Messages cleared";
+                    state.usbDetail = "messages.dat will save empty";
+                } else {
+                    state.clearMessagesArmed = true;
+                    state.usbStatus = "Confirm clear messages";
+                    state.usbDetail = "Press A again on CLEAR MSGS";
+                }
+            } else if (state.selectedSettingsIndex == 10) {
                 state.networkRequested = true;
             }
         } else if (state.uiTab == ScreenScreensaverSettings) {

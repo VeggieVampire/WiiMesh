@@ -18,17 +18,22 @@ set "WII_DEVICE=%~2"
 if "%WII_DEVICE%"=="" set "WII_DEVICE=sd"
 set "UPLOAD_LAYOUT=0"
 set "UPLOAD_THEME=0"
+set "CLEAR_REMOTE_LOGS=1"
 set "FTP_ACTIVE=0"
 if /I "%~3"=="--upload-layout" set "UPLOAD_LAYOUT=1"
 if /I "%~3"=="--upload-theme" set "UPLOAD_THEME=1"
+if /I "%~3"=="--keep-logs" set "CLEAR_REMOTE_LOGS=0"
 if /I "%~3"=="--active" set "FTP_ACTIVE=1"
 if /I "%~4"=="--upload-layout" set "UPLOAD_LAYOUT=1"
 if /I "%~4"=="--upload-theme" set "UPLOAD_THEME=1"
+if /I "%~4"=="--keep-logs" set "CLEAR_REMOTE_LOGS=0"
 if /I "%~5"=="--upload-layout" set "UPLOAD_LAYOUT=1"
 if /I "%~5"=="--upload-theme" set "UPLOAD_THEME=1"
+if /I "%~5"=="--keep-logs" set "CLEAR_REMOTE_LOGS=0"
 if /I "%~5"=="--active" set "FTP_ACTIVE=1"
 if /I "%~6"=="--upload-layout" set "UPLOAD_LAYOUT=1"
 if /I "%~6"=="--upload-theme" set "UPLOAD_THEME=1"
+if /I "%~6"=="--keep-logs" set "CLEAR_REMOTE_LOGS=0"
 if /I "%~6"=="--active" set "FTP_ACTIVE=1"
 if /I "%~4"=="--active" set "FTP_ACTIVE=1"
 set "FTP_URL=ftp://%WII_IP%/"
@@ -54,6 +59,7 @@ set "CURL_UPLOAD=%CURL_BASE% --max-time 120 --retry 1 --retry-delay 1 --retry-al
 >> "%LOG%" echo Target folder: /%WII_DEVICE%/apps/%APP_SLUG%/
 >> "%LOG%" echo Preserve GUI.config: yes
 >> "%LOG%" echo Preserve Settings.config: yes
+>> "%LOG%" echo Clear remote logs after prefetch: %CLEAR_REMOTE_LOGS%
 >> "%LOG%" echo Upload MeshLayout.config: %UPLOAD_LAYOUT%
 >> "%LOG%" echo Upload theme background: %UPLOAD_THEME%
 >> "%LOG%" echo Active FTP mode: %FTP_ACTIVE%
@@ -114,6 +120,19 @@ if errorlevel 1 (
   if exist "%PREFETCH_PREFIX%_debug.log" del "%PREFETCH_PREFIX%_debug.log" >nul 2>nul
 ) else (
   echo Saved previous debug log: %PREFETCH_PREFIX%_debug.log
+)
+
+if "%CLEAR_REMOTE_LOGS%"=="1" (
+  type nul > "%PREFETCH_DIR%\empty-debug.log"
+  >> "%LOG%" echo Truncate remote debug.log after prefetch.
+  curl %CURL_UPLOAD% --fail --ftp-create-dirs -T "%PREFETCH_DIR%\empty-debug.log" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/debug.log" >> "%LOG%" 2>&1
+  if errorlevel 1 (
+    >> "%LOG%" echo WARNING: Could not truncate remote debug.log.
+  ) else (
+    echo Cleared remote debug.log after saving a copy.
+  )
+) else (
+  >> "%LOG%" echo Remote debug.log preserved by --keep-logs.
 )
 
 curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/messages.dat" -o "%PREFETCH_PREFIX%_messages.dat" >> "%LOG%" 2>&1

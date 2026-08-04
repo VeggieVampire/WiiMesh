@@ -33,6 +33,10 @@ if exist "%OUT_DIR%" (
   copy /Y "%ROOT%\boot.dol" "%OUT_DIR%\boot.dol" >nul
   copy /Y "%ROOT%\meta.xml" "%OUT_DIR%\meta.xml" >nul
   copy /Y "%ROOT%\CHANGELOG.md" "%OUT_DIR%\CHANGELOG.md" >nul
+  copy /Y "%ROOT%\tools\deploy_ftpii.bat" "%OUT_DIR%\deploy_ftpii.bat" >nul
+  copy /Y "%ROOT%\tools\fetch_ftpii_logs.bat" "%OUT_DIR%\fetch_ftpii_logs.bat" >nul
+  copy /Y "%ROOT%\tools\send_udp_command.bat" "%OUT_DIR%\send_udp_command.bat" >nul
+  copy /Y "%ROOT%\tools\send_udp_command.py" "%OUT_DIR%\send_udp_command.py" >nul
 )
 
 echo Built boot.dol with compiled UI icons.

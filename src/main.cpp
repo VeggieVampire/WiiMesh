@@ -1258,7 +1258,12 @@ int main() {
     uint32_t lastScreensaverDebugSeq = 0;
     bool logDrawResult = false;
     while (true) {
+        const uint32_t beforeUiMessages = state.messageRevision;
         ui.updateInput(state);
+        if (state.messageRevision != beforeUiMessages) {
+            messagesDirty = true;
+            logger.line("UI message store changed");
+        }
         updateMidiPlayer(state, logger);
         if (state.fontStyle != lastLoggedFontStyle || state.fontSize != lastLoggedFontSize) {
             char line[96];

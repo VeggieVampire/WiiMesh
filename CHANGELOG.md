@@ -2,6 +2,20 @@
 
 All notable WiiMesh test-build changes are tracked here so real-Wii testing does not depend on chat history.
 
+## 0.1.186 - 2026-08-03
+
+- Removes the duplicate in-chat helper bar that could cover the newest incoming message at the bottom of the chat panel.
+- Moves chat-specific help into the single global footer line so controls are shown in one place.
+- Keeps the chat panel reserved for chat content and scroll indicators instead of overlaying help text on messages.
+
+## 0.1.185 - 2026-08-03
+
+- Adds a Settings -> `CLEAR MSGS` two-press action to clear in-app chat history and save an empty `messages.dat`.
+- Makes UI-driven message changes mark `messages.dat` dirty so clearing messages persists.
+- Updates FTPii deploy/fetch scripts to fetch `debug.log` first, then truncate the remote `debug.log` by default so logs do not grow forever.
+- Adds `--keep-logs` to FTPii scripts when the full remote `debug.log` should be preserved.
+- Updates the build helper to copy refreshed deploy/fetch/UDP scripts into `outputs/`.
+
 ## 0.1.184 - 2026-08-03
 
 - Replaces the global incoming-message seen counter with per-message seen state.

@@ -5,8 +5,11 @@ set "WII_IP=%~1"
 if "%WII_IP%"=="" set "WII_IP=192.168.0.42"
 set "WII_DEVICE=%~2"
 if "%WII_DEVICE%"=="" set "WII_DEVICE=sd"
+set "CLEAR_REMOTE_LOGS=1"
 set "FTP_ACTIVE=0"
+if /I "%~3"=="--keep-logs" set "CLEAR_REMOTE_LOGS=0"
 if /I "%~3"=="--active" set "FTP_ACTIVE=1"
+if /I "%~4"=="--keep-logs" set "CLEAR_REMOTE_LOGS=0"
 if /I "%~4"=="--active" set "FTP_ACTIVE=1"
 set "FTP_URL=ftp://%WII_IP%/"
 set "APP_SLUG=wii-mesh"
@@ -24,6 +27,7 @@ set "CURL_UPLOAD=%CURL_BASE% --max-time 120 --retry 1 --retry-delay 1 --retry-al
 >> "%FETCH_LOG%" echo Wii IP: %WII_IP%
 >> "%FETCH_LOG%" echo Wii device: %WII_DEVICE%
 >> "%FETCH_LOG%" echo Active FTP mode: %FTP_ACTIVE%
+>> "%FETCH_LOG%" echo Clear remote logs after fetch: %CLEAR_REMOTE_LOGS%
 >> "%FETCH_LOG%" echo Target folder: /%WII_DEVICE%/apps/%APP_SLUG%/
 >> "%FETCH_LOG%" echo.
 
@@ -59,6 +63,18 @@ if errorlevel 1 (
 )
 
 echo Saved "%OUT_DIR%debug.log"
+
+if "%CLEAR_REMOTE_LOGS%"=="1" (
+  type nul > "%OUT_DIR%empty-debug.log"
+  curl %CURL_UPLOAD% --fail --ftp-create-dirs -T "%OUT_DIR%empty-debug.log" "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/debug.log" >> "%FETCH_LOG%" 2>&1
+  if errorlevel 1 (
+    >> "%FETCH_LOG%" echo WARNING: Could not truncate remote debug.log.
+  ) else (
+    echo Cleared remote debug.log after saving a copy.
+  )
+) else (
+  >> "%FETCH_LOG%" echo Remote debug.log preserved by --keep-logs.
+)
 
 curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/messages.dat" -o "%OUT_DIR%messages.dat" >> "%FETCH_LOG%" 2>&1
 if errorlevel 1 curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/MESSAGES.DAT" -o "%OUT_DIR%messages.dat" >> "%FETCH_LOG%" 2>&1

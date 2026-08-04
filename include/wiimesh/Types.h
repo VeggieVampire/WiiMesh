@@ -6,7 +6,7 @@
 
 namespace wiimesh {
 
-constexpr const char *AppVersion = "0.1.184";
+constexpr const char *AppVersion = "0.1.186";
 constexpr uint32_t BroadcastNode = 0xffffffffu;
 constexpr int MaxMessages = 100;
 constexpr int MaxDebugPackets = 80;
@@ -181,6 +181,7 @@ struct AppState {
     std::string screensaverDebug;
     bool pointerVisible = false;
     bool pointerEnabled = true;
+    bool clearMessagesArmed = false;
     int pointerX = 0;
     int pointerY = 0;
     int selectedMessageIndex = 0;
