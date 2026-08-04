@@ -2,6 +2,16 @@
 
 All notable WiiMesh test-build changes are tracked here so real-Wii testing does not depend on chat history.
 
+## 0.1.184 - 2026-08-03
+
+- Replaces the global incoming-message seen counter with per-message seen state.
+- Opening a chat now clears unread state only for that chat instead of clearing every unread incoming message.
+- Loads saved `messages.dat` entries as already seen so long-running or rebooted sessions do not replay old bell alerts.
+- Fixes the visible `Text` count/live-data count to use the actual saved message list after loading history.
+- Adds unread count to `LIVE_DATA` replies for long-run debugging over UDP.
+- Live UDP check on `192.168.0.42` showed the test text was parsed and saved (`DM Mesheteer | testing | 66 saved`), pointing this fix at UI unread/chat filtering rather than USB receive failure.
+- Documents the manual direct-message MIDI transfer format so custom audio clips can be sent in chunks and auto-played by WiiMesh.
+
 ## 0.1.183 - 2026-08-02
 
 - Replaces the bare chat-detail range counter with a clearer `MSG X-Y OF Z` label.

@@ -59,6 +59,7 @@ bool MessageStore::load(const char *path, AppState &state) {
             if (isStatusOnlyMessage(m.text)) {
                 continue;
             }
+            m.seen = true;
             state.messages.push_back(m);
         }
     }

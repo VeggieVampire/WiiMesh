@@ -170,6 +170,53 @@ tools\upload_layout_udp.bat 192.168.0.13 MeshLayout.config
 This sends `LAYOUT_SET` commands for every config value and then sends
 `LAYOUT_SAVE`.
 
+## Direct MIDI Clip Transfers
+
+WiiMesh can receive small `.mid`/`.midi` files as direct Meshtastic messages.
+Transfers must be sent as direct messages to the WiiMesh node, not to LongFast
+or another channel. Completed MIDI files are saved under:
+
+```text
+SD:/apps/wii-mesh/received_files/
+```
+
+On real Wii hardware, a completed MIDI transfer is parsed and auto-played once.
+It will also appear in the MIDI player in Settings -> MIDI / FILES.
+
+The wire format is plain text:
+
+```text
+[START] filename.mid b64
+[CHUNK] 1/3 filename.mid b64:BASE64_TEXT_PART_1
+[CHUNK] 2/3 filename.mid b64:BASE64_TEXT_PART_2
+[CHUNK] 3/3 filename.mid b64:BASE64_TEXT_PART_3
+[END] filename.mid
+```
+
+Rules:
+
+- Send every line as a direct message to the WiiMesh device/user.
+- Keep chunks small enough for Meshtastic text messages; the helper uses 140
+  base64 characters per chunk.
+- Use a simple filename with no slashes, such as `doorbell.mid`.
+- Send chunks in order. WiiMesh replies with `[MFACK]` direct messages as it
+  receives START, CHUNK, and END.
+- The MIDI auto-play path is intentionally receive-side only; public channel
+  file-transfer commands are ignored.
+
+To generate a tiny test MIDI and the exact direct-message lines:
+
+```bat
+tools\make_meshfile_midi_test.bat
+```
+
+The helper writes:
+
+```text
+outputs/wiimesh_test.mid
+outputs/meshfile_midi_direct_messages.txt
+```
+
 ## Host Mock Test
 
 The parser and mock transport can be exercised without Wii hardware:

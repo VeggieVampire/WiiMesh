@@ -6,7 +6,7 @@
 
 namespace wiimesh {
 
-constexpr const char *AppVersion = "0.1.183";
+constexpr const char *AppVersion = "0.1.184";
 constexpr uint32_t BroadcastNode = 0xffffffffu;
 constexpr int MaxMessages = 100;
 constexpr int MaxDebugPackets = 80;
@@ -48,6 +48,7 @@ struct Message {
     bool direct = false;
     bool outgoing = false;
     bool delivered = false;
+    bool seen = false;
     std::string senderName;
     std::string senderId;
     std::string channelName;
@@ -211,7 +212,6 @@ struct AppState {
     uint32_t rxBadFrames = 0;
     uint32_t nodeCount = 0;
     uint32_t textMessageCount = 0;
-    uint32_t seenMessageCount = 0;
     uint32_t packetCount = 0;
     uint32_t decodedPacketCount = 0;
     uint32_t mapRevision = 0;

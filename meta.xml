@@ -2,8 +2,8 @@
 <app version="1">
   <name>WiiMesh</name>
   <coder>Codex</coder>
-  <version>0.1.183</version>
+  <version>0.1.184</version>
   <release_date>20260724000000</release_date>
-  <short_description>Meshtastic client v0.1.183</short_description>
+  <short_description>Meshtastic client v0.1.184</short_description>
   <long_description>Read-only Meshtastic message client for Nintendo Wii. Tested receiving direct Meshtastic messages over USB CDC with the RAKwireless RAK4631 WisBlock starter kit.</long_description>
 </app>

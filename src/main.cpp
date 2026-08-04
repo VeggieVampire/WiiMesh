@@ -309,6 +309,7 @@ static void addLocalSentMessage(AppState &state, uint32_t to, const char *text, 
     msg.direct = direct;
     msg.outgoing = true;
     msg.delivered = false;
+    msg.seen = true;
     msg.senderName = "Me";
     msg.senderId = state.myNodeId;
     msg.channelName = state.channelName;
@@ -395,6 +396,10 @@ static std::string oneLine(std::string s) {
 
 static std::string liveLayoutSample(const AppState &state) {
     std::string out;
+    int unread = 0;
+    for (const Message &m : state.messages) {
+        if (!m.outgoing && m.from != 0 && !m.seen) ++unread;
+    }
     const std::string nodeName = state.nodeName == "Unknown" ? "waiting" : state.nodeName;
     out += "topbar.text=WiiMesh v" + std::string(AppVersion) + " " +
            (state.protocolReady ? "ONLINE" : "SYNCING") + " Device: " +
@@ -405,7 +410,8 @@ static std::string liveLayoutSample(const AppState &state) {
         out += "ticker.text=ACCESS " + oneLine(sender + ": " + m.text) + "\n";
         out += "messages.text=Messages | " + oneLine(std::string(m.direct ? "DM " : "CH ") +
                sender + " | " + m.text) + " | " + std::to_string(state.messages.size()) + " saved\n";
-        out += "chat.text=Chat | " + oneLine(sender) + " | " + oneLine(m.text) + " | Read-only client\n";
+        out += "chat.text=Chat | " + oneLine(sender) + " | " + oneLine(m.text) +
+               " | Unread " + std::to_string(unread) + "\n";
     }
     out += "nodes.text=Nodes | " + std::to_string(state.nodeCount) + " known";
     int shown = 0;
@@ -420,7 +426,8 @@ static std::string liveLayoutSample(const AppState &state) {
     out += "telemetry.text=Telemetry | RX " + std::to_string(state.rxBytes) +
            " TX " + std::to_string(state.txBytes) +
            " Nodes " + std::to_string(state.nodeCount) +
-           " Text " + std::to_string(state.textMessageCount) + "\n";
+           " Text " + std::to_string(static_cast<int>(state.messages.size())) +
+           " Unread " + std::to_string(unread) + "\n";
     if (!state.meshFiles.empty()) {
         const MeshFileTransfer &transfer = state.meshFiles.back();
         out += "files.text=Files | " + oneLine(transfer.filename) + " | " +
@@ -1231,6 +1238,7 @@ int main() {
 
     MessageStore store;
     store.load(MessagesPath, state);
+    state.textMessageCount = static_cast<uint32_t>(state.messages.size());
 
     UsbTransport transport(&logger);
     MeshtasticProtocol protocol(&logger);

@@ -754,12 +754,15 @@ uint32_t incomingMessageCount(const AppState &state) {
 }
 
 uint32_t unreadIncomingCount(const AppState &state) {
-    const uint32_t incoming = incomingMessageCount(state);
-    return incoming > state.seenMessageCount ? incoming - state.seenMessageCount : 0;
+    uint32_t count = 0;
+    for (const Message &m : state.messages) {
+        if (isIncomingMessage(m) && !m.seen) ++count;
+    }
+    return count;
 }
 
-bool messageIsUnreadIncoming(const AppState &state, const Message &m, uint32_t incomingIndex) {
-    return isIncomingMessage(m) && incomingIndex >= state.seenMessageCount;
+bool messageIsUnreadIncoming(const Message &m) {
+    return isIncomingMessage(m) && !m.seen;
 }
 
 std::string tickerText(const AppState &state) {
@@ -1153,8 +1156,6 @@ void clampState(AppState &state) {
     if (state.selectedMidiIndex >= static_cast<int>(state.midiFiles.size())) {
         state.selectedMidiIndex = state.midiFiles.empty() ? 0 : static_cast<int>(state.midiFiles.size()) - 1;
     }
-    const uint32_t incoming = incomingMessageCount(state);
-    if (state.seenMessageCount > incoming) state.seenMessageCount = incoming;
     state.screensaverMode = ((state.screensaverMode % 3) + 3) % 3;
     if (state.screensaverSpeed < 0) state.screensaverSpeed = 0;
     if (state.screensaverSpeed > 5) state.screensaverSpeed = 5;
@@ -2382,13 +2383,9 @@ std::string fontSizeText(int size) {
 std::string screensaverDisplayText(const AppState &state) {
     const int mode = ((state.screensaverMode % 3) + 3) % 3;
     if (mode == 1) {
-        uint32_t incomingIndex = incomingMessageCount(state);
         for (int i = static_cast<int>(state.messages.size()) - 1; i >= 0; --i) {
             const Message &m = state.messages[static_cast<size_t>(i)];
-            if (!isIncomingMessage(m)) continue;
-            if (incomingIndex > 0) --incomingIndex;
-            if (incomingIndex < state.seenMessageCount) break;
-            return senderText(m) + ": " + messageText(m);
+            if (messageIsUnreadIncoming(m)) return senderText(m) + ": " + messageText(m);
         }
         for (int i = static_cast<int>(state.messages.size()) - 1; i >= 0; --i) {
             const Message &m = state.messages[static_cast<size_t>(i)];
@@ -2631,7 +2628,7 @@ void drawGraphicalHeader(const AppState &state, int x, int y, int w, int h) {
     drawTinyTextFitCentered(radioStatus, statusX, y + 10, statusW, 1, state.protocolReady ? green : amber);
     drawTinyTextFit(wiiIpText, ipX, y + 10, ipW, 1, cyan);
     drawTinyTextFit(state.channelName + "  NODES " + std::to_string(state.nodeCount) +
-                    "  TEXT " + std::to_string(state.textMessageCount),
+                    "  TEXT " + std::to_string(static_cast<int>(state.messages.size())),
                     x + pad, y + 25, w - pad * 2, 1, rgb565(180, 205, 212));
     const int signalW = 72;
     drawTinyTextFit(tickerText(state), x + pad, y + 40, std::max(50, w - pad * 2 - signalW), 1, green);
@@ -2902,16 +2899,12 @@ std::vector<ChatEntry> chatEntries(const AppState &state) {
         e.channelIndex = index;
         e.title = channelDisplayName(state, index);
         e.subtitle = "Group channel";
-        uint32_t incomingIndex = 0;
         for (int i = 0; i < static_cast<int>(state.messages.size()); ++i) {
             const Message &m = state.messages[static_cast<size_t>(i)];
-            const bool incoming = isIncomingMessage(m);
-            const uint32_t thisIncomingIndex = incomingIndex;
-            if (incoming) ++incomingIndex;
             if (m.direct || m.channelIndex != index) continue;
             e.last = senderText(m) + ": " + messageText(m);
             e.time = m.rxTime;
-            if (messageIsUnreadIncoming(state, m, thisIncomingIndex)) e.unread = true;
+            if (messageIsUnreadIncoming(m)) e.unread = true;
         }
         entries.push_back(e);
     };
@@ -2924,12 +2917,8 @@ std::vector<ChatEntry> chatEntries(const AppState &state) {
     }
     if (!hasPrimary) pushChannel(0);
 
-    uint32_t incomingIndex = 0;
     for (int i = 0; i < static_cast<int>(state.messages.size()); ++i) {
         const Message &m = state.messages[static_cast<size_t>(i)];
-        const bool incoming = isIncomingMessage(m);
-        const uint32_t thisIncomingIndex = incomingIndex;
-        if (incoming) ++incomingIndex;
         if (!m.direct) continue;
         const uint32_t peer = (m.from == 0 || m.senderId == state.myNodeId) ? m.to : m.from;
         auto found = std::find_if(entries.begin(), entries.end(), [&](const ChatEntry &e) {
@@ -2944,13 +2933,13 @@ std::vector<ChatEntry> chatEntries(const AppState &state) {
             e.subtitle = "Direct message";
             e.last = messageText(m);
             e.time = m.rxTime;
-            e.unread = messageIsUnreadIncoming(state, m, thisIncomingIndex);
+            e.unread = messageIsUnreadIncoming(m);
             entries.push_back(e);
         } else {
             found->title = directChatTitle(state, peer, m);
             found->last = messageText(m);
             found->time = m.rxTime;
-            if (messageIsUnreadIncoming(state, m, thisIncomingIndex)) found->unread = true;
+            if (messageIsUnreadIncoming(m)) found->unread = true;
         }
     }
 
@@ -2958,6 +2947,18 @@ std::vector<ChatEntry> chatEntries(const AppState &state) {
         return a.time > b.time;
     });
     return entries;
+}
+
+void markCurrentChatSeen(AppState &state) {
+    const bool channelChat = state.chatChannelIndex >= 0;
+    for (Message &m : state.messages) {
+        if (!isIncomingMessage(m)) continue;
+        if (channelChat) {
+            if (!m.direct && m.channelIndex == state.chatChannelIndex) m.seen = true;
+        } else if (directMessageMatchesPeer(state, m, state.chatPeerNodeId)) {
+            m.seen = true;
+        }
+    }
 }
 
 void openChatEntry(AppState &state, const ChatEntry &entry) {
@@ -2973,7 +2974,7 @@ void openChatEntry(AppState &state, const ChatEntry &entry) {
     state.uiTab = ScreenChatDetail;
     state.dashboardFocused = true;
     state.scrollOffset = 0;
-    state.seenMessageCount = incomingMessageCount(state);
+    markCurrentChatSeen(state);
 }
 
 void drawChannelKeyIcon(int x, int y, uint16_t c) {
@@ -3830,7 +3831,7 @@ void drawHeader(const AppState &state) {
     printAtW(row + 1, col, header.textWidth, "USB: " + state.usbStatus);
     printAtW(row + 2, col, header.textWidth, "Me: " + state.myNodeId + "  " + state.nodeName);
     printAtW(row + 3, col, header.textWidth, "Ch: " + state.channelName + "  Nodes " + std::to_string(state.nodeCount) +
-                  "  Text " + std::to_string(state.textMessageCount));
+                  "  Text " + std::to_string(static_cast<int>(state.messages.size())));
     printAtW(row + 4, col, header.textWidth, "RX " + std::to_string(state.rxBytes) + " bytes/" +
                   std::to_string(state.rxFrames) + " frames bad " +
                   std::to_string(state.rxBadFrames) + "  TX " + std::to_string(state.txBytes));
@@ -4636,7 +4637,7 @@ void Ui::updateInput(AppState &state) {
             const Message &m = state.messages[static_cast<size_t>(state.selectedMessageIndex)];
             setChatPeerFromMessage(state, m);
             state.uiTab = ScreenChatDetail;
-            state.seenMessageCount = incomingMessageCount(state);
+            markCurrentChatSeen(state);
         } else if (state.uiTab == ScreenChannels) {
             ChatEntry entry;
             entry.channel = true;
@@ -4649,6 +4650,8 @@ void Ui::updateInput(AppState &state) {
             state.chatPeerNodeId = n.nodeId;
             state.chatPeerName = nodeNameForId(state, n.id, n.nodeId);
             state.uiTab = ScreenChatDetail;
+            state.chatChannelIndex = -1;
+            markCurrentChatSeen(state);
         } else if (state.uiTab == ScreenChatDetail && state.chatChannelIndex < 0 && !state.chatPeerNodeId.empty()) {
             startCompose(state);
         } else if (state.uiTab == ScreenSettings) {
