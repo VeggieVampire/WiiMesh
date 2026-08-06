@@ -1,3 +1,4 @@
+#include "wiimesh/Clock.h"
 #include "wiimesh/Logger.h"
 #include "wiimesh/MapDownloader.h"
 #include "wiimesh/MeshtasticProtocol.h"
@@ -12,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
+#include <cstring>
 #include <ctime>
 #include <dirent.h>
 #include <string>
@@ -23,7 +25,6 @@
 #include <network.h>
 #include <ogcsys.h>
 #include <unistd.h>
-#include <cstring>
 #endif
 
 using namespace wiimesh;
@@ -37,6 +38,7 @@ static const char *MessagesPath = "sd:/apps/wii-mesh/messages.dat";
 static const char *MapPath = "sd:/apps/wii-mesh/mesh_map.dat";
 static const char *MapUrlPath = "sd:/apps/wii-mesh/maps.url";
 static const char *SettingsConfigPath = "sd:/apps/wii-mesh/Settings.config";
+static const char *UsbConfigPath = "sd:/apps/wii-mesh/USB.config";
 static constexpr unsigned short UdpLogPort = 44015;
 static constexpr unsigned short UdpCommandPort = 44016;
 static const char *DebugTargetPath = "sd:/apps/wii-mesh/debug-target.txt";
@@ -77,6 +79,49 @@ static int clampInt(int value, int lo, int hi) {
 static bool parseBoolValue(const std::string &value) {
     return value == "1" || value == "on" || value == "ON" || value == "true" ||
            value == "TRUE" || value == "yes" || value == "YES";
+}
+
+static int hexValue(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static bool parseHexBytes(const char *text, std::vector<uint8_t> &out) {
+    out.clear();
+    int high = -1;
+    for (const char *p = text; *p; ++p) {
+        const unsigned char uc = static_cast<unsigned char>(*p);
+        if (std::isspace(uc) || *p == ':' || *p == '-' || *p == ',' || *p == '_') {
+            continue;
+        }
+        if (*p == 'x' || *p == 'X') {
+            continue;
+        }
+        const int v = hexValue(*p);
+        if (v < 0) return false;
+        if (high < 0) {
+            high = v;
+        } else {
+            out.push_back(static_cast<uint8_t>((high << 4) | v));
+            high = -1;
+        }
+    }
+    return high < 0 && !out.empty();
+}
+
+static std::string hexPreviewMain(const std::vector<uint8_t> &payload, size_t maxBytes = 64) {
+    static const char *digits = "0123456789abcdef";
+    std::string out;
+    const size_t n = std::min(payload.size(), maxBytes);
+    for (size_t i = 0; i < n; ++i) {
+        if (!out.empty()) out.push_back(' ');
+        out.push_back(digits[(payload[i] >> 4) & 0xf]);
+        out.push_back(digits[payload[i] & 0xf]);
+    }
+    if (payload.size() > maxBytes) out += " ...";
+    return out;
 }
 
 static bool applySettingsLine(AppState &state, const std::string &rawLine, std::string *message = nullptr) {
@@ -167,6 +212,73 @@ static bool loadSettingsConfig(AppState &state, std::string *message = nullptr) 
     return true;
 }
 
+static bool ensureUsbConfig() {
+    FILE *existing = std::fopen(UsbConfigPath, "rb");
+    if (existing) {
+        std::fclose(existing);
+        return true;
+    }
+    FILE *f = std::fopen(UsbConfigPath, "wb");
+    if (!f) return false;
+    const char *text =
+        "# WiiMesh USB serial test profiles\n"
+        "# Edit this file on SD/FTP to try new Meshtastic USB devices without rebuilding boot.dol.\n"
+        "# Standard USB CDC ACM devices are tried automatically from their descriptors.\n"
+        "# Add a VID:PID here only when diagnostics show bulk IN/OUT endpoints but WiiMesh skips the device.\n"
+        "# Examples:\n"
+        "# force_cdc=303a:1001    # one exact Espressif/ESP32-S3 VID:PID\n"
+        "# force_cdc=303a:*       # all Espressif/ESP32-S3 products with bulk IN/OUT endpoints\n"
+        "# force_cdc=239a:8029    # RAK4631 test unit, usually auto-detected\n"
+        "# try_any_bulk_cdc=0     # set to 1 only for short diagnostics; can grab non-serial USB devices\n"
+        "# Generic control transfer format:\n"
+        "# control=VID:PID,bmRequestType,bRequest,wValue,wIndex,hexData\n"
+        "# CP210x 115200 8N1 + DTR/RTS recipe for 10c4:ea60:\n"
+        "# control=10c4:ea60,0x41,0x00,0x0001,0x0000,\n"
+        "# control=10c4:ea60,0x41,0x07,0x0303,0x0000,\n"
+        "# control=10c4:ea60,0x41,0x03,0x0800,0x0000,\n"
+        "# control=10c4:ea60,0x41,0x1e,0x0000,0x0000,00c20100\n";
+    const bool ok = std::fwrite(text, 1, std::strlen(text), f) == std::strlen(text);
+    std::fclose(f);
+    return ok;
+}
+
+static std::string readTextFileOrEmpty(const char *path) {
+    FILE *f = std::fopen(path, "rb");
+    if (!f) return "";
+    std::string out;
+    char buf[256];
+    while (std::fgets(buf, sizeof(buf), f)) {
+        out += buf;
+    }
+    std::fclose(f);
+    return out;
+}
+
+static bool appendUsbConfigLine(const std::string &line) {
+    ensureUsbConfig();
+    FILE *f = std::fopen(UsbConfigPath, "ab");
+    if (!f) return false;
+    std::string out = trimLine(line);
+    out += "\n";
+    const bool ok = std::fwrite(out.data(), 1, out.size(), f) == out.size();
+    std::fclose(f);
+    return ok;
+}
+
+static bool appendCp210xUsbConfigRecipe() {
+    bool ok = appendUsbConfigLine("force_cdc=10c4:ea60");
+    ok = appendUsbConfigLine("control=10c4:ea60,0x41,0x00,0x0001,0x0000,") && ok;
+    ok = appendUsbConfigLine("control=10c4:ea60,0x41,0x07,0x0303,0x0000,") && ok;
+    ok = appendUsbConfigLine("control=10c4:ea60,0x41,0x03,0x0800,0x0000,") && ok;
+    ok = appendUsbConfigLine("control=10c4:ea60,0x41,0x1e,0x0000,0x0000,00c20100") && ok;
+    return ok;
+}
+
+static bool resetUsbConfigFile() {
+    std::remove(UsbConfigPath);
+    return ensureUsbConfig();
+}
+
 static std::string loadMapUrlTemplate() {
     FILE *f = std::fopen(MapUrlPath, "rb");
     if (!f) {
@@ -214,7 +326,7 @@ static NodeSummary sampleNode(uint32_t id, const char *name, const char *shortNa
     node.shortName = shortName;
     node.hardwareModel = hardwareModel;
     node.hardwareName = hardwareName;
-    node.lastHeard = static_cast<uint32_t>(std::time(nullptr));
+    node.lastHeard = currentUnixTime();
     node.snr = id == 0x433bf1b8u ? 0.0f : (id == 0x61916fb3u ? -1.0f : 6.0f);
     node.hopsAway = mine ? 0 : (id == 0x433bf1b8u ? -1 : (id == 0x61916fb3u ? 2 : 1));
     node.batteryLevel = mine ? 65 : -1;
@@ -245,7 +357,7 @@ static void seedIconDebugState(AppState &state) {
     Message rx;
     rx.from = 0x433bf1b8u;
     rx.to = 0xcb05014cu;
-    rx.rxTime = static_cast<uint32_t>(std::time(nullptr));
+    rx.rxTime = currentUnixTime();
     rx.direct = true;
     rx.senderName = "Mesheteer";
     rx.senderId = nodeId(rx.from);
@@ -304,7 +416,7 @@ static void addLocalSentMessage(AppState &state, uint32_t to, const char *text, 
     Message msg;
     msg.from = 0;
     msg.to = to;
-    msg.rxTime = static_cast<uint32_t>(std::time(nullptr));
+    msg.rxTime = currentUnixTime();
     msg.channelIndex = 0;
     msg.direct = direct;
     msg.outgoing = true;
@@ -358,6 +470,8 @@ static const char *uiTabName(int tab) {
     case 13: return "FONT_DEBUG";
     case 14: return "MIDI_PLAYER";
     case 15: return "GUI_OPTIONS";
+    case 16: return "USB_TOOLS";
+    case 17: return "ADMIN_TOOLS";
     default: return "UNKNOWN";
     }
 }
@@ -394,16 +508,73 @@ static std::string oneLine(std::string s) {
     return s;
 }
 
+static bool looksLikeBangNodeId(const std::string &s) {
+    if (s.size() != 9 || s[0] != '!') return false;
+    for (size_t i = 1; i < s.size(); ++i) {
+        if (!std::isxdigit(static_cast<unsigned char>(s[i]))) return false;
+    }
+    return true;
+}
+
+static std::string liveDisplayName(const std::string &preferred,
+                                   const std::string &fallback) {
+    const std::string one = oneLine(preferred);
+    if (!one.empty() && one != "Unknown" && one != "waiting" && !looksLikeBangNodeId(one)) {
+        return one;
+    }
+    const std::string two = oneLine(fallback);
+    return two.empty() ? one : two;
+}
+
+static uint32_t parseBangNodeId(const std::string &s) {
+    if (!looksLikeBangNodeId(s)) return 0;
+    uint32_t value = 0;
+    for (size_t i = 1; i < s.size(); ++i) {
+        const char c = s[i];
+        value <<= 4;
+        if (c >= '0' && c <= '9') value |= static_cast<uint32_t>(c - '0');
+        else if (c >= 'a' && c <= 'f') value |= static_cast<uint32_t>(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') value |= static_cast<uint32_t>(c - 'A' + 10);
+    }
+    return value;
+}
+
+static bool isLocalNode(const AppState &state, uint32_t id) {
+    return id != 0 && !state.myNodeId.empty() && nodeId(id) == state.myNodeId;
+}
+
+static uint32_t directPeerForReport(const AppState &state, const Message &m) {
+    const uint32_t sender = parseBangNodeId(m.senderId);
+    if (!m.outgoing) {
+        if (m.from != 0 && !isLocalNode(state, m.from)) return m.from;
+        if (sender != 0 && !isLocalNode(state, sender)) return sender;
+        if (m.to != 0 && m.to != BroadcastNode && !isLocalNode(state, m.to)) return m.to;
+    } else {
+        if (m.to != 0 && m.to != BroadcastNode && !isLocalNode(state, m.to)) return m.to;
+        if (sender != 0 && !isLocalNode(state, sender)) return sender;
+        if (m.from != 0 && !isLocalNode(state, m.from)) return m.from;
+    }
+    if (m.from != 0) return m.from;
+    if (m.to != 0 && m.to != BroadcastNode) return m.to;
+    return sender;
+}
+
 static std::string liveLayoutSample(const AppState &state) {
     std::string out;
     int unread = 0;
     for (const Message &m : state.messages) {
         if (!m.outgoing && m.from != 0 && !m.seen) ++unread;
     }
-    const std::string nodeName = state.nodeName == "Unknown" ? "waiting" : state.nodeName;
+    std::string nodeName = liveDisplayName(state.nodeName, state.myNodeId);
+    for (const auto &n : state.knownNodes) {
+        if (n.isMine || (!state.myNodeId.empty() && n.nodeId == state.myNodeId)) {
+            nodeName = liveDisplayName(n.name, liveDisplayName(n.shortName, nodeName));
+            break;
+        }
+    }
     out += "topbar.text=WiiMesh v" + std::string(AppVersion) + " " +
            (state.protocolReady ? "ONLINE" : "SYNCING") + " Device: " +
-           nodeName + " Me: " + state.myNodeId + "\n";
+           nodeName + " Me: " + nodeName + "\n";
     if (!state.messages.empty()) {
         const Message &m = state.messages.back();
         const std::string sender = m.senderName.empty() ? m.senderId : m.senderName;
@@ -418,7 +589,7 @@ static std::string liveLayoutSample(const AppState &state) {
     for (const auto &n : state.knownNodes) {
         if (shown++ >= 4) break;
         out += " | ";
-        out += oneLine(n.name.empty() ? n.nodeId : n.name);
+        out += liveDisplayName(n.name, liveDisplayName(n.shortName, n.nodeId));
     }
     out += "\n";
     out += "radio_status.text=Radio Status | ";
@@ -434,6 +605,205 @@ static std::string liveLayoutSample(const AppState &state) {
                std::to_string(transfer.receivedChunks) + "/" +
                std::to_string(transfer.totalChunks) + " | ";
         out += transfer.saved ? "saved\n" : (transfer.complete ? "complete\n" : "receiving\n");
+    }
+    return out;
+}
+
+static std::string chatListReport(const AppState &state) {
+    struct Row {
+        bool unread = false;
+        uint32_t peer = 0;
+        uint32_t time = 0;
+        std::string title;
+        std::string last;
+    };
+    std::vector<Row> rows;
+    auto betterTitle = [](const std::string &candidate, const std::string &current) {
+        const std::string c = oneLine(candidate);
+        if (c.empty()) return false;
+        if (current.empty()) return true;
+        if (looksLikeBangNodeId(current) && !looksLikeBangNodeId(c)) return true;
+        if (current == "Me" && c != "Me") return true;
+        return false;
+    };
+    auto nodeName = [&](uint32_t id) {
+        for (const auto &n : state.knownNodes) {
+            if (n.id == id || n.nodeId == nodeId(id)) {
+                if (!n.name.empty() && n.name != n.nodeId) return n.name;
+                if (!n.shortName.empty() && n.shortName != n.nodeId) return n.shortName;
+                if (!n.nodeId.empty()) return n.nodeId;
+            }
+        }
+        return nodeId(id);
+    };
+    for (const Message &m : state.messages) {
+        if (!m.direct) continue;
+        const uint32_t peer = directPeerForReport(state, m);
+        auto found = std::find_if(rows.begin(), rows.end(), [&](const Row &r) {
+            return r.peer == peer;
+        });
+        if (found == rows.end()) {
+            Row row;
+            row.peer = peer;
+            row.title = nodeName(peer);
+            if (row.title == nodeId(peer) && !m.outgoing && !m.senderName.empty() &&
+                m.senderName != m.senderId && m.senderName != "Me") {
+                row.title = m.senderName;
+            }
+            row.last = m.text;
+            row.time = m.rxTime;
+            row.unread = !m.outgoing && m.from != 0 && !m.seen;
+            rows.push_back(row);
+        } else {
+            const std::string title = nodeName(peer);
+            if (betterTitle(title, found->title)) {
+                found->title = title;
+            }
+            if (found->title == nodeId(peer) && !m.outgoing && !m.senderName.empty() &&
+                m.senderName != m.senderId && m.senderName != "Me") {
+                found->title = m.senderName;
+            }
+            found->last = m.text;
+            found->time = m.rxTime;
+            if (!m.outgoing && m.from != 0 && !m.seen) found->unread = true;
+        }
+    }
+    std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) {
+        if (a.unread != b.unread) return a.unread && !b.unread;
+        return a.time > b.time;
+    });
+    std::string out = "DIRECT_CHAT_LIST " + std::to_string(rows.size()) + "\n";
+    for (size_t i = 0; i < rows.size(); ++i) {
+        const Row &r = rows[i];
+        out += std::to_string(static_cast<int>(i)) + " ";
+        out += r.unread ? "UNREAD " : "read ";
+        out += "DM ";
+        out += nodeId(r.peer);
+        out += " | " + oneLine(r.title) + " | " + oneLine(r.last) + "\n";
+    }
+    return out;
+}
+
+static std::string recentLines(const std::vector<std::string> &lines, size_t maxLines) {
+    std::string out;
+    const size_t start = lines.size() > maxLines ? lines.size() - maxLines : 0;
+    for (size_t i = start; i < lines.size(); ++i) {
+        out += oneLine(lines[i]) + "\n";
+    }
+    return out;
+}
+
+static std::string streamReport(const AppState &state) {
+    std::string out = "STREAM_GET " + std::to_string(state.streamEvents.size()) + "\n";
+    out += recentLines(state.streamEvents, 40);
+    return out;
+}
+
+static std::string eventsReport(const AppState &state) {
+    std::string out = "EVENTS_GET " + std::to_string(state.protocolEvents.size()) + "\n";
+    out += recentLines(state.protocolEvents, 60);
+    return out;
+}
+
+static std::string debugPacketReport(const AppState &state) {
+    std::string out = "DEBUG_GET " + std::to_string(state.debugPackets.size()) + "\n";
+    const size_t start = state.debugPackets.size() > 16 ? state.debugPackets.size() - 16 : 0;
+    for (size_t i = start; i < state.debugPackets.size(); ++i) {
+        const DebugPacket &p = state.debugPackets[i];
+        out += std::to_string(static_cast<int>(i)) + "\t" +
+               oneLine(p.title) + "\t" +
+               oneLine(p.summary) + "\t" +
+               oneLine(p.meshFields) + "\t" +
+               oneLine(p.dataFields) + "\t" +
+               oneLine(p.decoded) + "\n";
+    }
+    return out;
+}
+
+static std::string rxStatusReport(const AppState &state) {
+    std::string out;
+    out += "RX_STATUS\n";
+    out += "version " + std::string(AppVersion) + "\n";
+    out += "usb " + state.usbStatus + " | " + state.usbDetail + "\n";
+    out += "node " + liveDisplayName(state.nodeName, state.myNodeId) + " id " + state.myNodeId + "\n";
+    out += "channel " + state.channelName + "\n";
+    out += "rx_bytes " + std::to_string(state.rxBytes) + " frames " + std::to_string(state.rxFrames) +
+           " bad " + std::to_string(state.rxBadFrames) + " tx " + std::to_string(state.txBytes) + "\n";
+    out += "packets " + std::to_string(state.packetCount) +
+           " decoded " + std::to_string(state.decodedPacketCount) +
+           " text " + std::to_string(state.textMessageCount) +
+           " messages " + std::to_string(state.messages.size()) + "\n";
+    out += "last from " + nodeId(state.lastPacketFrom) +
+           " to " + nodeId(state.lastPacketTo) +
+           " ch " + std::to_string(state.lastPacketChannel) +
+           " port " + std::to_string(state.lastPacketPort) + "\n";
+    out += "recent_messages:\n";
+    const size_t msgStart = state.messages.size() > 6 ? state.messages.size() - 6 : 0;
+    for (size_t i = msgStart; i < state.messages.size(); ++i) {
+        const Message &m = state.messages[i];
+        out += std::to_string(static_cast<int>(i)) + " " +
+               (m.outgoing ? "out" : "in") + " " +
+               (m.direct ? "DM" : "CH") + " " +
+               (m.seen ? "seen" : "UNREAD") + " " +
+               nodeId(m.from) + "->" + nodeId(m.to) + " " +
+               oneLine(m.senderName) + " | " + oneLine(m.text) + "\n";
+    }
+    out += "stream:\n" + recentLines(state.streamEvents, 8);
+    out += "events:\n" + recentLines(state.protocolEvents, 8);
+    if (!state.debugPackets.empty()) {
+        const DebugPacket &d = state.debugPackets.back();
+        out += "last_debug " + d.title + " | " + oneLine(d.summary) + " | " +
+               oneLine(d.decoded) + "\n";
+    }
+    return out;
+}
+
+static std::string textLogReport(const AppState &state) {
+    std::string out = "TEXT_LOG " + std::to_string(state.messages.size()) +
+                      " saved text_count " + std::to_string(state.textMessageCount) + "\n";
+    for (size_t i = 0; i < state.messages.size(); ++i) {
+        const Message &m = state.messages[i];
+        out += std::to_string(static_cast<int>(i)) + "\t" +
+               (m.outgoing ? "out" : "in") + "\t" +
+               (m.direct ? "DM" : "CH") + "\t" +
+               (m.seen ? "seen" : "UNREAD") + "\t" +
+               nodeId(m.from) + "\t" + nodeId(m.to) + "\tch" +
+               std::to_string(m.channelIndex) + "\t" +
+               oneLine(m.senderName) + "\t" +
+               oneLine(m.channelName) + "\t" +
+               oneLine(m.text) + "\n";
+    }
+    return out;
+}
+
+static std::string usbDeviceReport(const AppState &state) {
+    std::string out = "USB devices " + std::to_string(state.usbDevices.size()) + "\n";
+    if (state.usbDevices.empty()) {
+        out += "none\n";
+        return out;
+    }
+    for (size_t i = 0; i < state.usbDevices.size(); ++i) {
+        const UsbDeviceInfo &d = state.usbDevices[i];
+        out += "#" + std::to_string(i) + " VID " + hex16(d.vendorId) +
+               " PID " + hex16(d.productId) +
+               " class " + hex16(d.deviceClass) +
+               " sub " + hex16(d.deviceSubClass) +
+               " proto " + hex16(d.deviceProtocol) +
+               " cfg " + std::to_string(d.configurationValue) +
+               " " + d.driverHint + " " + d.diagnostic + "\n";
+        for (const auto &iface : d.interfaces) {
+            out += "  if " + std::to_string(iface.number) +
+                   " alt " + std::to_string(iface.alternate) +
+                   " class " + hex16(iface.klass) +
+                   " sub " + hex16(iface.subclass) +
+                   " proto " + hex16(iface.protocol) + "\n";
+            for (const auto &ep : iface.endpoints) {
+                out += "    ep " + hex16(ep.address) +
+                       " attr " + hex16(ep.attributes) +
+                       " max " + std::to_string(ep.maxPacketSize) +
+                       " interval " + std::to_string(ep.interval) + "\n";
+            }
+        }
     }
     return out;
 }
@@ -510,6 +880,24 @@ static bool decodeBase64(const std::string &text, std::vector<uint8_t> &out) {
         }
     }
     return true;
+}
+
+static std::string encodeBase64(const std::vector<uint8_t> &bytes) {
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((bytes.size() + 2) / 3) * 4);
+    for (size_t i = 0; i < bytes.size(); i += 3) {
+        const uint32_t a = bytes[i];
+        const uint32_t b = (i + 1 < bytes.size()) ? bytes[i + 1] : 0;
+        const uint32_t c = (i + 2 < bytes.size()) ? bytes[i + 2] : 0;
+        const uint32_t triple = (a << 16) | (b << 8) | c;
+        out.push_back(alphabet[(triple >> 18) & 0x3f]);
+        out.push_back(alphabet[(triple >> 12) & 0x3f]);
+        out.push_back(i + 1 < bytes.size() ? alphabet[(triple >> 6) & 0x3f] : '=');
+        out.push_back(i + 2 < bytes.size() ? alphabet[triple & 0x3f] : '=');
+    }
+    return out;
 }
 
 static bool meshFileBytes(const MeshFileTransfer &transfer, std::vector<uint8_t> &out) {
@@ -866,7 +1254,66 @@ static bool deleteSelectedMidi(AppState &state, Logger &logger) {
     return false;
 }
 
-static void updateMidiPlayer(AppState &state, Logger &logger) {
+static bool queueSelectedMidiSend(AppState &state, Logger &logger) {
+    scanMidiFiles(state);
+    if (state.midiSendTo == 0) {
+        state.midiStatus = "Open a direct chat first";
+        state.usbStatus = "MIDI send needs DM";
+        logger.line("MIDI send failed; no direct peer selected");
+        return false;
+    }
+    if (state.midiFiles.empty()) {
+        state.midiStatus = "No MIDI files to send";
+        state.usbStatus = "MIDI send failed";
+        logger.line("MIDI send failed; no files");
+        state.midiSendTo = 0;
+        return false;
+    }
+    const int index = clampInt(state.selectedMidiIndex, 0, static_cast<int>(state.midiFiles.size()) - 1);
+    const std::string name = state.midiFiles[static_cast<size_t>(index)];
+    const std::string path = std::string(MeshFilesDir) + "/" + name;
+    std::vector<uint8_t> bytes;
+    if (!readWholeFile(path, bytes) || bytes.empty()) {
+        state.midiStatus = "Read failed " + name;
+        state.usbStatus = "MIDI send failed";
+        logger.line("MIDI send read failed " + path);
+        state.midiSendTo = 0;
+        return false;
+    }
+    if (bytes.size() > 8192) {
+        state.midiStatus = "Too large " + name;
+        state.usbStatus = "MIDI too large";
+        logger.line("MIDI send too large " + path + " bytes " + std::to_string(bytes.size()));
+        state.midiSendTo = 0;
+        return false;
+    }
+    const std::string encoded = encodeBase64(bytes);
+    constexpr size_t ChunkChars = 140;
+    const int chunks = std::max(1, static_cast<int>((encoded.size() + ChunkChars - 1) / ChunkChars));
+    const uint32_t to = state.midiSendTo;
+    state.pendingTexts.push_back({to, 0, true, false,
+                                  "[START] " + name + " " + std::to_string(chunks) + " base64"});
+    for (int i = 0; i < chunks; ++i) {
+        const size_t offset = static_cast<size_t>(i) * ChunkChars;
+        state.pendingTexts.push_back({to, 0, true, false,
+                                      "[CHUNK] " + std::to_string(i + 1) + "/" +
+                                      std::to_string(chunks) + " " + name + " b64:" +
+                                      encoded.substr(offset, ChunkChars)});
+    }
+    state.pendingTexts.push_back({to, 0, true, false, "[END] " + name});
+    addLocalSentMessage(state, to, ("MIDI queued: " + name).c_str(), true);
+    state.midiStatus = "Queued " + name;
+    state.usbStatus = "MIDI queued";
+    state.usbDetail = name + " -> " + nodeId(to) + " chunks " + std::to_string(chunks);
+    logger.line("MIDI send queued " + name + " to " + nodeId(to) +
+                " bytes " + std::to_string(bytes.size()) +
+                " chunks " + std::to_string(chunks));
+    state.midiSendTo = 0;
+    return true;
+}
+
+static bool updateMidiPlayer(AppState &state, Logger &logger) {
+    bool messagesChanged = false;
     if (state.midiCommand == 3) {
         scanMidiFiles(state);
         state.midiCommand = 0;
@@ -882,6 +1329,9 @@ static void updateMidiPlayer(AppState &state, Logger &logger) {
     } else if (state.midiCommand == 5) {
         deleteSelectedMidi(state, logger);
         state.midiCommand = 0;
+    } else if (state.midiCommand == 6) {
+        messagesChanged = queueSelectedMidiSend(state, logger);
+        state.midiCommand = 0;
     }
     if (state.midiPlaying && state.midiFramesRemaining > 0) {
         --state.midiFramesRemaining;
@@ -896,6 +1346,7 @@ static void updateMidiPlayer(AppState &state, Logger &logger) {
             }
         }
     }
+    return messagesChanged;
 }
 
 #if defined(WIIMESH_WII)
@@ -950,7 +1401,7 @@ static void pollCommandSocket(s32 sock, Logger &logger, UsbTransport &transport,
     if (sock < 0) {
         return;
     }
-    char buffer[1024] = {};
+    char buffer[4096] = {};
     sockaddr_in from;
     socklen_t fromLen = sizeof(from);
     s32 n = net_recvfrom(sock, buffer, sizeof(buffer) - 1, 0,
@@ -986,14 +1437,14 @@ static void pollCommandSocket(s32 sock, Logger &logger, UsbTransport &transport,
             state.txBytes += 6;
             state.usbStatus = std::string("Wake ") + std::to_string(protocol.wakeMode()) +
                               " " + protocol.wakeModeName();
-            state.protocolReady = true;
+            state.protocolReady = false;
             sentStart = true;
             sentHeartbeat = false;
-            addStream(state, "Wii -> RAK wake " + std::to_string(protocol.wakeMode()) +
+            addStream(state, "Wii -> Radio wake " + std::to_string(protocol.wakeMode()) +
                             " " + protocol.wakeModeName() + " config");
         } else {
             state.usbStatus = std::string("Wake ") + std::to_string(protocol.wakeMode()) + " failed";
-            addStream(state, "Wii -> RAK wake " + std::to_string(protocol.wakeMode()) +
+            addStream(state, "Wii -> Radio wake " + std::to_string(protocol.wakeMode()) +
                             " " + protocol.wakeModeName() + " failed");
         }
         state.usbDetail = transport.lastError();
@@ -1011,10 +1462,10 @@ static void pollCommandSocket(s32 sock, Logger &logger, UsbTransport &transport,
         if (ok) {
             state.txBytes += 6;
             state.usbStatus = matrix ? "Matrix config sent" : "Config requested by UDP";
-            state.protocolReady = true;
+            state.protocolReady = false;
             sentStart = true;
             sentHeartbeat = false;
-            addStream(state, "Wii -> RAK config wake " + std::to_string(protocol.wakeMode()) +
+            addStream(state, "Wii -> Radio config wake " + std::to_string(protocol.wakeMode()) +
                             " " + protocol.wakeModeName());
         } else {
             state.usbStatus = matrix ? "Matrix TX failed" : "UDP config TX failed";
@@ -1027,6 +1478,68 @@ static void pollCommandSocket(s32 sock, Logger &logger, UsbTransport &transport,
         logDevices(logger, state);
         logger.line("UDP command SCAN complete");
         sendCommandReply(sock, from, "SCAN OK\n");
+    } else if (std::strcmp(buffer, "USB_GET") == 0 || std::strcmp(buffer, "USB") == 0) {
+        const std::string report = usbDeviceReport(state);
+        logger.line("UDP command USB_GET devices " + std::to_string(state.usbDevices.size()));
+        sendCommandReply(sock, from, report.c_str());
+    } else if (std::strcmp(buffer, "USB_SCAN") == 0) {
+        transport.pollDevices(state.usbDevices);
+        logDevices(logger, state);
+        const std::string report = usbDeviceReport(state);
+        logger.line("UDP command USB_SCAN devices " + std::to_string(state.usbDevices.size()));
+        sendCommandReply(sock, from, report.c_str());
+    } else if (std::strcmp(buffer, "USB_OPEN") == 0) {
+        transport.pollDevices(state.usbDevices);
+        logDevices(logger, state);
+        const bool ok = transport.openFirstSupported(state.usbDevices);
+        if (ok) {
+            state.usbConnected = true;
+            state.usbStatus = "USB serial connected";
+            state.usbDetail = transport.lastError();
+            sentStart = protocol.startConfig(transport);
+            state.protocolReady = false;
+            sentHeartbeat = false;
+        } else {
+            state.usbConnected = false;
+            state.usbStatus = state.usbDevices.empty() ? "No USB devices detected" : "No USB serial opened";
+            state.usbDetail = transport.lastError();
+            sentStart = false;
+            sentHeartbeat = false;
+        }
+        const std::string reply = std::string(ok ? "USB_OPEN OK\n" : "USB_OPEN FAILED\n") +
+                                  usbDeviceReport(state);
+        logger.line(std::string("UDP command USB_OPEN ") + (ok ? "ok " : "failed ") + state.usbDetail);
+        sendCommandReply(sock, from, reply.c_str());
+    } else if (std::strcmp(buffer, "USB_CONFIG_GET") == 0) {
+        ensureUsbConfig();
+        std::string text = readTextFileOrEmpty(UsbConfigPath);
+        if (text.empty()) text = "USB_CONFIG empty or unavailable\n";
+        logger.line("UDP command USB_CONFIG_GET");
+        sendCommandReply(sock, from, text.c_str());
+    } else if (std::strncmp(buffer, "USB_CONFIG_SET ", 15) == 0) {
+        const std::string line = trimLine(buffer + 15);
+        const bool allowed = line.rfind("force_cdc=", 0) == 0 ||
+                             line.rfind("try_any_bulk_cdc=", 0) == 0 ||
+                             line.rfind("try_bulk_cdc=", 0) == 0 ||
+                             line.rfind("control=", 0) == 0 ||
+                             line.rfind("usb_control=", 0) == 0;
+        const bool ok = allowed && appendUsbConfigLine(line);
+        logger.line(std::string("UDP command USB_CONFIG_SET ") + (ok ? "ok " : "failed ") + line);
+        sendCommandReply(sock, from, ok ? "USB_CONFIG_SET OK\n" : "USB_CONFIG_SET FAILED\n");
+    } else if (std::strcmp(buffer, "USB_CONFIG_CP210X") == 0) {
+        const bool ok = appendCp210xUsbConfigRecipe();
+        logger.line(std::string("UDP command USB_CONFIG_CP210X ") + (ok ? "ok" : "failed"));
+        sendCommandReply(sock, from, ok ? "USB_CONFIG_CP210X OK\n" : "USB_CONFIG_CP210X FAILED\n");
+    } else if (std::strcmp(buffer, "USB_CONTROLS") == 0) {
+        const bool ok = transport.applyConfiguredUsbControls();
+        state.usbDetail = transport.lastError();
+        logger.line(std::string("UDP command USB_CONTROLS ") + (ok ? "ok " : "failed ") + state.usbDetail);
+        sendCommandReply(sock, from, ok ? "USB_CONTROLS OK\n" : "USB_CONTROLS FAILED\n");
+    } else if (std::strcmp(buffer, "USB_CONFIG_DEFAULT") == 0) {
+        const bool ok = resetUsbConfigFile();
+        logger.line(std::string("UDP command USB_CONFIG_DEFAULT ") + (ok ? "ok" : "failed") +
+                    " reset");
+        sendCommandReply(sock, from, ok ? "USB_CONFIG_DEFAULT OK\n" : "USB_CONFIG_DEFAULT FAILED\n");
     } else if (std::strcmp(buffer, "LAYOUT") == 0 || std::strcmp(buffer, "RELOAD_LAYOUT") == 0) {
         const bool ok = ui.reloadLayout(state);
         logger.line(std::string("UDP command LAYOUT ") + (ok ? "ok" : "failed"));
@@ -1048,6 +1561,100 @@ static void pollCommandSocket(s32 sock, Logger &logger, UsbTransport &transport,
         const std::string live = liveLayoutSample(state);
         logger.line("UDP command LIVE_DATA");
         sendCommandReply(sock, from, live.c_str());
+    } else if (std::strcmp(buffer, "CHAT_LIST") == 0) {
+        const std::string chats = chatListReport(state);
+        logger.line("UDP command CHAT_LIST");
+        sendCommandReply(sock, from, chats.c_str());
+    } else if (std::strcmp(buffer, "TEXT_LOG") == 0 || std::strcmp(buffer, "MESSAGES_GET") == 0) {
+        const std::string log = textLogReport(state);
+        logger.line("UDP command TEXT_LOG");
+        sendCommandReply(sock, from, log.c_str());
+    } else if (std::strcmp(buffer, "STREAM_GET") == 0 || std::strcmp(buffer, "STREAM") == 0) {
+        const std::string report = streamReport(state);
+        logger.line("UDP command STREAM_GET");
+        sendCommandReply(sock, from, report.c_str());
+    } else if (std::strcmp(buffer, "EVENTS_GET") == 0 || std::strcmp(buffer, "EVENTS") == 0) {
+        const std::string report = eventsReport(state);
+        logger.line("UDP command EVENTS_GET");
+        sendCommandReply(sock, from, report.c_str());
+    } else if (std::strcmp(buffer, "DEBUG_GET") == 0 || std::strcmp(buffer, "DEBUG") == 0) {
+        const std::string report = debugPacketReport(state);
+        logger.line("UDP command DEBUG_GET");
+        sendCommandReply(sock, from, report.c_str());
+    } else if (std::strcmp(buffer, "RX_STATUS") == 0 || std::strcmp(buffer, "RX") == 0) {
+        const std::string status = rxStatusReport(state);
+        logger.line("UDP command RX_STATUS");
+        sendCommandReply(sock, from, status.c_str());
+    } else if (std::strcmp(buffer, "HEARTBEAT") == 0) {
+        const bool ok = transport.isOpen() && protocol.sendHeartbeat(transport);
+        if (ok) {
+            state.txBytes += 8;
+            addStream(state, "Wii -> Radio heartbeat");
+        }
+        state.usbStatus = ok ? "Heartbeat queued" : "Heartbeat failed";
+        state.usbDetail = transport.lastError();
+        logger.line(std::string("UDP command HEARTBEAT ") + (ok ? "ok" : "failed"));
+        sendCommandReply(sock, from, ok ? "HEARTBEAT OK\n" : "HEARTBEAT FAILED\n");
+    } else if (std::strncmp(buffer, "USB_RAW_HEX ", 12) == 0 ||
+               std::strncmp(buffer, "RAW_HEX ", 8) == 0) {
+        const char *hex = std::strncmp(buffer, "USB_RAW_HEX ", 12) == 0 ? buffer + 12 : buffer + 8;
+        std::vector<uint8_t> bytes;
+        const bool parsed = parseHexBytes(hex, bytes);
+        const bool ok = parsed && transport.isOpen() &&
+                        transport.write(bytes.data(), bytes.size()) == static_cast<int>(bytes.size());
+        if (ok) {
+            state.txBytes += static_cast<uint32_t>(bytes.size());
+            addStream(state, "Wii -> Radio raw USB hex " + std::to_string(bytes.size()) + " bytes");
+        }
+        state.usbStatus = ok ? "Raw USB hex sent" : (parsed ? "Raw USB hex failed" : "Raw USB hex parse failed");
+        state.usbDetail = parsed ? hexPreviewMain(bytes, 32) : "Use USB_RAW_HEX 94 c3 00 00";
+        logger.line(std::string("UDP command USB_RAW_HEX ") +
+                    (ok ? "ok " : "failed ") + std::to_string(parsed ? bytes.size() : 0));
+        sendCommandReply(sock, from, ok ? "USB_RAW_HEX OK\n" :
+                         (parsed ? "USB_RAW_HEX FAILED\n" : "USB_RAW_HEX PARSE_FAILED\n"));
+    } else if (std::strncmp(buffer, "USB_ASCII ", 10) == 0 ||
+               std::strncmp(buffer, "SERIAL_ASCII ", 13) == 0) {
+        const char *text = std::strncmp(buffer, "USB_ASCII ", 10) == 0 ? buffer + 10 : buffer + 13;
+        const size_t len = std::strlen(text);
+        const bool ok = len > 0 && transport.isOpen() &&
+                        transport.write(reinterpret_cast<const uint8_t *>(text), len) == static_cast<int>(len);
+        if (ok) {
+            state.txBytes += static_cast<uint32_t>(len);
+            addStream(state, "Wii -> Radio raw USB ASCII " + std::to_string(static_cast<unsigned>(len)) + " bytes");
+        }
+        state.usbStatus = ok ? "Raw USB ASCII sent" : "Raw USB ASCII failed";
+        state.usbDetail = text;
+        logger.line(std::string("UDP command USB_ASCII ") + (ok ? "ok " : "failed ") +
+                    std::to_string(static_cast<unsigned>(len)));
+        sendCommandReply(sock, from, ok ? "USB_ASCII OK\n" : "USB_ASCII FAILED\n");
+    } else if (std::strncmp(buffer, "TO_RADIO_HEX ", 13) == 0 ||
+               std::strncmp(buffer, "TORADIO_HEX ", 12) == 0) {
+        const char *hex = std::strncmp(buffer, "TO_RADIO_HEX ", 13) == 0 ? buffer + 13 : buffer + 12;
+        std::vector<uint8_t> payload;
+        const bool parsed = parseHexBytes(hex, payload);
+        const bool ok = parsed && transport.isOpen() && protocol.sendToRadioPayload(transport, payload, "udp_hex");
+        if (ok) {
+            state.txBytes += static_cast<uint32_t>(payload.size() + 4);
+            addStream(state, "Wii -> Radio ToRadio hex payload " + std::to_string(payload.size()) + " bytes");
+        }
+        state.usbStatus = ok ? "ToRadio hex queued" : (parsed ? "ToRadio hex failed" : "ToRadio hex parse failed");
+        state.usbDetail = parsed ? hexPreviewMain(payload, 32) : "Use TO_RADIO_HEX protobuf-payload";
+        logger.line(std::string("UDP command TO_RADIO_HEX ") +
+                    (ok ? "ok " : "failed ") + std::to_string(parsed ? payload.size() : 0));
+        sendCommandReply(sock, from, ok ? "TO_RADIO_HEX OK\n" :
+                         (parsed ? "TO_RADIO_HEX FAILED\n" : "TO_RADIO_HEX PARSE_FAILED\n"));
+    } else if (std::strncmp(buffer, "FROM_RADIO_HEX ", 15) == 0 ||
+               std::strncmp(buffer, "FROMRADIO_HEX ", 14) == 0) {
+        const char *hex = std::strncmp(buffer, "FROM_RADIO_HEX ", 15) == 0 ? buffer + 15 : buffer + 14;
+        std::vector<uint8_t> payload;
+        const bool parsed = parseHexBytes(hex, payload);
+        const bool ok = parsed && protocol.parseFromRadio(payload, state);
+        state.usbStatus = ok ? "FromRadio hex parsed" : (parsed ? "FromRadio hex ignored" : "FromRadio hex parse failed");
+        state.usbDetail = parsed ? hexPreviewMain(payload, 32) : "Use FROM_RADIO_HEX protobuf-payload";
+        logger.line(std::string("UDP command FROM_RADIO_HEX ") +
+                    (ok ? "ok " : "failed ") + std::to_string(parsed ? payload.size() : 0));
+        sendCommandReply(sock, from, ok ? "FROM_RADIO_HEX OK\n" :
+                         (parsed ? "FROM_RADIO_HEX IGNORED\n" : "FROM_RADIO_HEX PARSE_FAILED\n"));
     } else if (std::strcmp(buffer, "SETTINGS_GET") == 0 || std::strcmp(buffer, "CONFIG_GET") == 0) {
         const std::string settings = settingsExport(state);
         logger.line("UDP command SETTINGS_GET");
@@ -1083,6 +1690,14 @@ static void pollCommandSocket(s32 sock, Logger &logger, UsbTransport &transport,
         const bool ok = saveMeshMap(MapPath, state);
         logger.line(std::string("UDP command MAP_SAVE ") + (ok ? "ok" : "failed"));
         sendCommandReply(sock, from, ok ? "MAP_SAVE OK\n" : "MAP_SAVE FAILED\n");
+    } else if (std::strcmp(buffer, "NODE_CLEAR") == 0 || std::strcmp(buffer, "NODES_CLEAR") == 0 ||
+               std::strcmp(buffer, "MAP_CLEAR") == 0) {
+        protocol.clearNodeCache(state);
+        const bool removed = std::remove(MapPath) == 0;
+        logger.line(std::string("UDP command NODE_CLEAR cache cleared map ") + (removed ? "removed" : "not present"));
+        state.usbStatus = "Node cache cleared";
+        state.usbDetail = "waiting for fresh NodeInfo";
+        sendCommandReply(sock, from, removed ? "NODE_CLEAR OK MAP_REMOVED\n" : "NODE_CLEAR OK\n");
     } else if (std::strcmp(buffer, "TILE_URL") == 0) {
         const std::string url = loadMapUrlTemplate();
         logger.line("UDP command TILE_URL");
@@ -1141,10 +1756,10 @@ static void pollCommandSocket(s32 sock, Logger &logger, UsbTransport &transport,
             state.txBytes += static_cast<uint32_t>(buildTextToRadioFrame(dest, 0, text, true).size());
             state.usbStatus = "UDP direct text queued";
             addLocalSentMessage(state, dest, text, true);
-            addStream(state, "Wii -> RAK DM " + nodeId(dest) + " TEXT_MESSAGE_APP queued");
+            addStream(state, "Wii -> Radio DM " + nodeId(dest) + " TEXT_MESSAGE_APP queued");
         } else {
             state.usbStatus = "UDP direct text failed";
-            addStream(state, "Wii -> RAK DM " + nodeId(dest) + " failed");
+            addStream(state, "Wii -> Radio DM " + nodeId(dest) + " failed");
         }
         state.usbDetail = std::string("DM ") + nodeId(dest) + " " + text;
         logger.line(std::string("UDP command DM ") + nodeId(dest) + (ok ? " ok" : " failed"));
@@ -1165,16 +1780,16 @@ static void pollCommandSocket(s32 sock, Logger &logger, UsbTransport &transport,
             state.txBytes += static_cast<uint32_t>(buildTextToRadioFrame(BroadcastNode, 0, text, false).size());
             state.usbStatus = "UDP channel text queued";
             addLocalSentMessage(state, BroadcastNode, text, false);
-            addStream(state, "Wii -> RAK CH " + state.channelName + " TEXT_MESSAGE_APP queued");
+            addStream(state, "Wii -> Radio CH " + state.channelName + " TEXT_MESSAGE_APP queued");
         } else {
             state.usbStatus = "UDP channel text failed";
-            addStream(state, "Wii -> RAK CH failed");
+            addStream(state, "Wii -> Radio CH failed");
         }
         state.usbDetail = std::string("CH Primary ") + text;
         logger.line(std::string("UDP command CH ") + (ok ? "ok" : "failed"));
         sendCommandReply(sock, from, ok ? "CH OK\n" : "CH FAILED\n");
     } else {
-        logger.line("UDP command unknown; use PING CDC WAKES WAKE CFG MATRIX SCAN LAYOUT LAYOUT_SET LAYOUT_SAVE LAYOUT_GET LIVE_DATA SETTINGS_GET SETTINGS_SET SETTINGS_RELOAD SETTINGS_SAVE MAP_GET MAP_SAVE TILE_URL TILE_SET_URL TILE_GET DM CH");
+        logger.line("UDP command unknown; use PING CDC WAKES WAKE CFG HEARTBEAT MATRIX SCAN USB_GET USB_SCAN USB_OPEN USB_RAW_HEX USB_ASCII TO_RADIO_HEX FROM_RADIO_HEX USB_CONFIG_GET USB_CONFIG_SET USB_CONFIG_CP210X USB_CONTROLS USB_CONFIG_DEFAULT LAYOUT LAYOUT_SET LAYOUT_SAVE LAYOUT_GET LIVE_DATA CHAT_LIST TEXT_LOG STREAM_GET EVENTS_GET DEBUG_GET RX_STATUS SETTINGS_GET SETTINGS_SET SETTINGS_RELOAD SETTINGS_SAVE MAP_GET MAP_SAVE TILE_URL TILE_SET_URL TILE_GET DM CH");
         sendCommandReply(sock, from, "UNKNOWN COMMAND\n");
     }
 }
@@ -1216,6 +1831,7 @@ int main() {
     state.usbDetail = "Build " + std::string(AppVersion);
     std::string settingsLoadStatus;
     loadSettingsConfig(state, &settingsLoadStatus);
+    const bool usbConfigReady = ensureUsbConfig();
 #if defined(WIIMESH_ICON_DEBUG)
     seedIconDebugState(state);
 #endif
@@ -1233,6 +1849,7 @@ int main() {
     state.netStatus = std::string("IP/UDP off; enable Wii IP in Settings -> ") + debugTarget;
     logger.line(std::string("WiiMesh starting v") + AppVersion);
     logger.line("Settings " + settingsLoadStatus);
+    logger.line(std::string("USB.config ") + (usbConfigReady ? "ready" : "create failed"));
     state.logStatus = logger.status();
     scanMidiFiles(state);
 
@@ -1256,6 +1873,7 @@ int main() {
     int lastLoggedFontStyle = -1;
     int lastLoggedFontSize = -1;
     uint32_t lastScreensaverDebugSeq = 0;
+    uint32_t lastBellRequestSeq = state.bellRequestSeq;
     bool logDrawResult = false;
     while (true) {
         const uint32_t beforeUiMessages = state.messageRevision;
@@ -1264,7 +1882,9 @@ int main() {
             messagesDirty = true;
             logger.line("UI message store changed");
         }
-        updateMidiPlayer(state, logger);
+        if (updateMidiPlayer(state, logger)) {
+            messagesDirty = true;
+        }
         if (state.fontStyle != lastLoggedFontStyle || state.fontSize != lastLoggedFontSize) {
             char line[96];
             std::snprintf(line, sizeof(line), "UI font style=%d size=%d", state.fontStyle, state.fontSize);
@@ -1275,6 +1895,11 @@ int main() {
         if (state.screensaverDebugSeq != lastScreensaverDebugSeq) {
             logger.line(std::string("UI screensaver ") + state.screensaverDebug);
             lastScreensaverDebugSeq = state.screensaverDebugSeq;
+        }
+        if (state.bellRequestSeq != lastBellRequestSeq) {
+            logger.line("UI bell requested seq " + std::to_string(state.bellRequestSeq) +
+                        (state.screensaverActive ? " screensaver" : " visible"));
+            lastBellRequestSeq = state.bellRequestSeq;
         }
         if (state.uiTab != lastLoggedTab) {
             char line[192];
@@ -1317,6 +1942,171 @@ int main() {
         }
 #endif
 
+        if (state.adminCommand != 0) {
+            const int command = state.adminCommand;
+            state.adminCommand = 0;
+            if (command == 1) {
+                const bool ok = transport.isOpen() && protocol.startConfig(transport);
+                if (ok) {
+                    state.txBytes += 6;
+                    state.usbStatus = "Admin config wake sent";
+                    state.protocolReady = false;
+                    sentStart = true;
+                    sentHeartbeat = false;
+                    addStream(state, "ADMIN Wii -> Radio config wake " +
+                                     std::to_string(protocol.wakeMode()) + " " +
+                                     protocol.wakeModeName());
+                } else {
+                    state.usbStatus = "Admin config wake failed";
+                    addStream(state, "ADMIN config wake failed");
+                }
+                state.usbDetail = transport.lastError();
+                logger.line(std::string("UI admin config wake ") + (ok ? "ok " : "failed ") + state.usbDetail);
+            } else if (command == 2) {
+                const bool ok = transport.isOpen() && protocol.sendHeartbeat(transport);
+                if (ok) {
+                    state.txBytes += 6;
+                    sentHeartbeat = true;
+                    addStream(state, "ADMIN Wii -> Radio heartbeat");
+                }
+                state.usbStatus = ok ? "Admin heartbeat sent" : "Admin heartbeat failed";
+                state.usbDetail = transport.lastError();
+                logger.line(std::string("UI admin heartbeat ") + (ok ? "ok " : "failed ") + state.usbDetail);
+            } else if (command == 3) {
+                char line[160];
+                std::snprintf(line, sizeof(line), "ADMIN RX snapshot rx=%u bytes/%u frames bad=%u text=%u tx=%u",
+                              state.rxBytes, state.rxFrames, state.rxBadFrames,
+                              state.textMessageCount, state.txBytes);
+                state.usbStatus = "Admin RX snapshot";
+                state.usbDetail = line;
+                addStream(state, line);
+                logger.line(line);
+            } else if (command == 4) {
+                state.usbStatus = "Admin text snapshot";
+                state.usbDetail = std::to_string(static_cast<int>(state.messages.size())) + " saved messages";
+                addStream(state, "ADMIN text snapshot " + state.usbDetail);
+                const int count = static_cast<int>(state.messages.size());
+                const int first = std::max(0, count - 5);
+                for (int i = first; i < count; ++i) {
+                    const Message &m = state.messages[static_cast<size_t>(i)];
+                    addStream(state, "ADMIN MSG " + std::string(m.direct ? "DM " : "CH ") +
+                                     (m.senderName.empty() ? m.senderId : m.senderName) +
+                                     ": " + m.text);
+                }
+                logger.line("UI admin text snapshot " + std::to_string(count));
+            } else if (command == 5) {
+                state.usbStatus = "Admin stream marker";
+                state.usbDetail = "marker written";
+                addStream(state, "ADMIN stream marker tab=" + std::string(uiTabName(state.uiTab)) +
+                                 " node=" + state.myNodeId);
+                logger.line("UI admin stream marker");
+            } else if (command == 6) {
+                state.usbStatus = "Admin debug marker";
+                state.usbDetail = "protocol events " + std::to_string(static_cast<int>(state.protocolEvents.size()));
+                addStream(state, "ADMIN debug marker events=" +
+                                 std::to_string(static_cast<int>(state.protocolEvents.size())) +
+                                 " debug=" + std::to_string(static_cast<int>(state.debugPackets.size())));
+                logger.line("UI admin debug marker");
+            } else if (command == 7) {
+                protocol.clearNodeCache(state);
+                state.usbStatus = "Admin node cache cleared";
+                state.usbDetail = "waiting for fresh NodeInfo";
+                addStream(state, "ADMIN node cache cleared");
+                logger.line("UI admin node cache cleared");
+            } else if (command == 8) {
+                protocol.reset();
+                state.protocolReady = false;
+                sentStart = false;
+                sentHeartbeat = false;
+                const bool ok = transport.isOpen() && protocol.startConfig(transport);
+                if (ok) {
+                    state.txBytes += 6;
+                    sentStart = true;
+                    state.usbStatus = "Admin full resync";
+                    addStream(state, "ADMIN full resync config wake sent");
+                } else {
+                    state.usbStatus = "Admin resync waiting USB";
+                    addStream(state, "ADMIN full resync waiting for USB");
+                }
+                state.usbDetail = transport.lastError();
+                logger.line(std::string("UI admin full resync ") + (ok ? "ok " : "waiting ") + state.usbDetail);
+            }
+        }
+
+        if (state.usbCommand != 0) {
+            const int command = state.usbCommand;
+            state.usbCommand = 0;
+            if (command == 1) {
+                transport.pollDevices(state.usbDevices);
+                logDevices(logger, state);
+                state.usbStatus = "USB scan complete";
+                state.usbDetail = std::to_string(state.usbDevices.size()) + " device(s)";
+                logger.line("UI USB tool scan complete");
+            } else if (command == 2) {
+                transport.pollDevices(state.usbDevices);
+                logDevices(logger, state);
+                const bool ok = transport.openFirstSupported(state.usbDevices);
+                if (ok) {
+                    state.usbConnected = true;
+                    state.usbStatus = "USB serial connected";
+                    state.usbDetail = transport.lastError();
+                    sentStart = protocol.startConfig(transport);
+                    state.protocolReady = false;
+                    sentHeartbeat = false;
+                } else {
+                    state.usbConnected = false;
+                    state.usbStatus = "USB open failed";
+                    state.usbDetail = transport.lastError();
+                    sentStart = false;
+                    sentHeartbeat = false;
+                }
+                logger.line(std::string("UI USB tool open ") + (ok ? "ok " : "failed ") + state.usbDetail);
+            } else if (command == 3) {
+                const bool ok = appendUsbConfigLine("force_cdc=303a:*");
+                state.usbStatus = ok ? "USB.config updated" : "USB.config failed";
+                state.usbDetail = "force_cdc=303a:*";
+                logger.line(std::string("UI USB tool force esp32 ") + (ok ? "ok" : "failed"));
+            } else if (command == 4) {
+                const bool ok = appendUsbConfigLine("try_any_bulk_cdc=1");
+                state.usbStatus = ok ? "USB.config diagnostic mode" : "USB.config failed";
+                state.usbDetail = "try_any_bulk_cdc=1";
+                logger.line(std::string("UI USB tool try any bulk ") + (ok ? "ok" : "failed"));
+            } else if (command == 5) {
+                const bool ok = resetUsbConfigFile();
+                state.usbStatus = ok ? "USB.config reset" : "USB.config reset failed";
+                state.usbDetail = "default USB rules";
+                logger.line(std::string("UI USB tool reset config ") + (ok ? "ok" : "failed"));
+            } else if (command == 6) {
+                const bool ok = transport.reassertCdcControl();
+                state.usbStatus = ok ? "CDC reasserted" : "CDC reassert failed";
+                state.usbDetail = transport.lastError();
+                logger.line(std::string("UI USB tool CDC ") + (ok ? "ok " : "failed ") + state.usbDetail);
+            } else if (command == 7) {
+                const bool ok = transport.isOpen() && protocol.startConfig(transport);
+                if (ok) {
+                    state.txBytes += 6;
+                    state.usbStatus = "Config wake sent";
+                    state.protocolReady = false;
+                    sentStart = true;
+                    sentHeartbeat = false;
+                } else {
+                    state.usbStatus = "Config wake failed";
+                }
+                state.usbDetail = transport.lastError();
+                logger.line(std::string("UI USB tool config wake ") + (ok ? "ok " : "failed ") + state.usbDetail);
+            } else if (command == 8) {
+                const bool ok = appendCp210xUsbConfigRecipe();
+                state.usbStatus = ok ? "CP210x recipe added" : "CP210x recipe failed";
+                state.usbDetail = "USB.config 10c4:ea60 controls";
+                logger.line(std::string("UI USB tool cp210x recipe ") + (ok ? "ok" : "failed"));
+            } else if (command == 9) {
+                const bool ok = transport.applyConfiguredUsbControls();
+                state.usbStatus = ok ? "USB controls applied" : "USB controls failed";
+                state.usbDetail = transport.lastError();
+                logger.line(std::string("UI USB tool controls ") + (ok ? "ok " : "failed ") + state.usbDetail);
+            }
+        }
+
         if (!transport.isOpen()) {
             if ((ticks % 120) == 0) {
                 transport.pollDevices(state.usbDevices);
@@ -1336,7 +2126,7 @@ int main() {
                     }
                     state.usbDetail = transport.lastError();
                     logger.line("USB detail " + state.usbDetail);
-                    state.protocolReady = sentStart;
+                    state.protocolReady = false;
                 } else {
                     state.usbConnected = false;
                     if (state.usbDevices.empty()) {
@@ -1356,6 +2146,22 @@ int main() {
                     messagesDirty = true;
                 }
                 state.usbDetail = transport.lastError();
+            }
+            if (sentStart && !state.protocolReady && (ticks % 300) == 0) {
+                const bool ok = protocol.startConfig(transport);
+                if (ok) {
+                    state.txBytes += 6;
+                    state.usbStatus = std::string("Config retry ") +
+                                      std::to_string(protocol.wakeMode()) +
+                                      " " + protocol.wakeModeName();
+                    addStream(state, "Wii -> Radio config retry while syncing");
+                } else {
+                    state.usbStatus = "Config retry failed";
+                    addStream(state, "Wii -> Radio config retry failed");
+                }
+                state.usbDetail = transport.lastError();
+                logger.line(std::string("USB config retry while syncing ") + (ok ? "ok " : "failed ") +
+                            state.usbDetail);
             }
             if (!sentStart && (ticks % 120) == 0) {
                 sentStart = protocol.startConfig(transport);
@@ -1385,7 +2191,7 @@ int main() {
                 if (protocol.sendHeartbeat(transport)) {
                     sentHeartbeat = true;
                     state.txBytes += 6;
-                    addStream(state, "Wii -> RAK heartbeat");
+                    addStream(state, "Wii -> Radio heartbeat");
                 }
                 state.usbDetail = transport.lastError();
             }
@@ -1402,7 +2208,7 @@ int main() {
                     state.usbStatus = "Reply queued";
                     addLocalSentMessage(state, sendTo, sentText.c_str(), true);
                     messagesDirty = true;
-                    addStream(state, "Wii -> RAK UI DM queued");
+                    addStream(state, "Wii -> Radio UI DM queued");
                     logger.line("UI reply queued to " + nodeId(sendTo));
                     state.pendingSendText.clear();
                     state.pendingSendTo = 0;
@@ -1427,18 +2233,18 @@ int main() {
                                                   pending.text.c_str(), pending.direct);
                 if (ok) {
                     state.txBytes += static_cast<uint32_t>(pending.text.size());
-                    state.usbStatus = "MeshFile receipt sent";
+                    state.usbStatus = pending.saveToChat ? "MeshFile sent" : "MeshFile control sent";
                     state.usbDetail = pending.text;
-                    addStream(state, "Wii -> RAK " + pending.text);
-                    logger.line("MeshFile receipt sent to " + nodeId(pending.to) + " " + pending.text);
+                    addStream(state, "Wii -> Radio " + pending.text);
+                    logger.line("MeshFile text sent to " + nodeId(pending.to) + " " + pending.text);
                     if (pending.saveToChat) {
                         addLocalSentMessage(state, pending.to, pending.text.c_str(), pending.direct);
                         messagesDirty = true;
                     }
                     state.pendingTexts.erase(state.pendingTexts.begin());
                 } else {
-                    state.usbStatus = "MeshFile ACK failed";
-                    logger.line("MeshFile ACK send failed to " + nodeId(pending.to));
+                    state.usbStatus = "MeshFile send failed";
+                    logger.line("MeshFile text send failed to " + nodeId(pending.to));
                     state.pendingTexts.erase(state.pendingTexts.begin());
                 }
             } else if (pending.to == 0) {

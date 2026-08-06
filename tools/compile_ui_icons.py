@@ -10,11 +10,17 @@ except ImportError:
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PROJECT_OUTPUT_ICONS = ROOT.parent.parent / "outputs" / "ui_icons"
+PROJECT_OUTPUT_ICONS = ROOT.parent.parent / "outputs" / "icons"
+LEGACY_OUTPUT_ICONS = ROOT.parent.parent / "outputs" / "ui_icons"
 ICON_DIR_ENV = os.environ.get("WIIMESH_ICON_DIR")
 ICON_DIR = Path(ICON_DIR_ENV) if ICON_DIR_ENV else None
 if ICON_DIR is None:
-    ICON_DIR = PROJECT_OUTPUT_ICONS if PROJECT_OUTPUT_ICONS.exists() else ROOT / "assets" / "ui_icons"
+    if PROJECT_OUTPUT_ICONS.exists():
+        ICON_DIR = PROJECT_OUTPUT_ICONS
+    elif LEGACY_OUTPUT_ICONS.exists():
+        ICON_DIR = LEGACY_OUTPUT_ICONS
+    else:
+        ICON_DIR = ROOT / "assets" / "ui_icons"
 OUT = ROOT / "include" / "wiimesh" / "generated" / "MenuIcons.h"
 ICONS = [
     ("home", "Home"),

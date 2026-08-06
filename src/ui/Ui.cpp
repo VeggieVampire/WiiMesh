@@ -1,3 +1,4 @@
+#include "wiimesh/Clock.h"
 #include "wiimesh/Ui.h"
 #include "wiimesh/generated/EmojiIcons.h"
 #include "wiimesh/generated/MenuIcons.h"
@@ -33,7 +34,7 @@ constexpr int PageBottom = 25;
 constexpr int PageRows = PageBottom - PageTop + 1;
 constexpr int ContentRow = 12;
 constexpr int PrimaryTabCount = 6;
-constexpr int ScreenCount = 16;
+constexpr int ScreenCount = 18;
 constexpr int ScreenHome = 0;
 constexpr int ScreenNodeOptions = 1;
 constexpr int ScreenChannels = 2;
@@ -50,7 +51,13 @@ constexpr int ScreenFontSettings = 12;
 constexpr int ScreenFontDebug = 13;
 constexpr int ScreenMidiPlayer = 14;
 constexpr int ScreenGuiOptions = 15;
-constexpr int SettingsRowCount = 11;
+constexpr int ScreenUsbTools = 16;
+constexpr int ScreenAdminTools = 17;
+constexpr int SettingsRowCount = 13;
+constexpr int UsbToolRowCount = 9;
+constexpr int UsbToolRowH = 25;
+constexpr int AdminToolRowCount = 8;
+constexpr int AdminToolRowH = 25;
 constexpr int GuiZoneCount = 5;
 constexpr int KeyboardCols = 10;
 constexpr int KeyboardSuggestionCount = 5;
@@ -79,6 +86,7 @@ struct KeyboardKey {
     std::string label;
     std::string value;
     uint32_t emojiCodepoint = 0;
+    std::vector<uint32_t> emojiCodepoints;
     int span = 1;
 };
 
@@ -195,6 +203,16 @@ bool menuTabEnabled(const AppState &state, int tab);
 struct KeyboardKey;
 std::vector<KeyboardKey> keyboardKeys(const AppState *state = nullptr);
 void pressKeyboard(AppState &state);
+bool saveGuiConfig(AppState &state);
+int firstEnabledPrimaryTab(const AppState &state);
+std::vector<ChatEntry> chatEntries(const AppState &state);
+int newestUnreadChatIndex(const std::vector<ChatEntry> &entries);
+void openChatEntry(AppState &state, const ChatEntry &entry);
+int chatDetailMessageCount(const AppState &state);
+int chatDetailVisibleCount(const AppState &state);
+bool looksLikeNodeIdText(const std::string &text);
+ChannelSummary channelSlot(const AppState &state, int index, bool *configured = nullptr);
+std::string channelDisplayName(const AppState &state, int index);
 
 GuiZone &zone(const char *name) {
     for (auto &z : gGuiZones) {
@@ -217,6 +235,11 @@ bool pointInRect(int px, int py, int x, int y, int w, int h) {
     return px >= x && py >= y && px < x + w && py < y + h;
 }
 
+struct PullBarState {
+    bool up = false;
+    bool down = false;
+};
+
 int settingsFirstVisibleRow(int selectedIndex, int panelHeight) {
     const int rowH = 26;
     const int availableH = std::max(0, panelHeight - 42 - 28);
@@ -226,6 +249,35 @@ int settingsFirstVisibleRow(int selectedIndex, int panelHeight) {
     const int maxFirst = std::max(0, SettingsRowCount - visibleRows);
     if (first > maxFirst) first = maxFirst;
     return first;
+}
+
+int settingsVisibleRows(int panelHeight) {
+    const int rowH = 26;
+    const int availableH = std::max(0, panelHeight - 42 - 28);
+    return std::max(1, std::min(SettingsRowCount, availableH / rowH));
+}
+
+int chatEntryVisibleRows(int panelHeight) {
+    const int rowH = 74;
+    const int gap = 8;
+    const int listTop = 68;
+    const int listBottom = panelHeight - 34;
+    return std::max(1, (listBottom - listTop + gap) / (rowH + gap));
+}
+
+int nodeVisibleRows(int panelHeight) {
+    const int cardH = 86;
+    const int gap = 8;
+    const int listTop = 40;
+    const int listBottom = panelHeight - 12;
+    return std::max(1, (listBottom - listTop + gap) / (cardH + gap));
+}
+
+int midiVisibleRows(int panelHeight) {
+    const int rowH = 25;
+    const int listTop = 68;
+    const int listBottom = panelHeight - 34;
+    return std::max(1, (listBottom - listTop) / rowH);
 }
 
 int chatKeyboardHeight(int contentH) {
@@ -279,6 +331,224 @@ bool handlePointerKeyboardClick(AppState &state, int px, int py, int contentX, i
     return true;
 }
 
+void activateSettingsSelection(AppState &state) {
+    if (state.selectedSettingsIndex == 0) {
+        state.uiTab = ScreenLog;
+        state.dashboardFocused = true;
+    } else if (state.selectedSettingsIndex == 1) {
+        state.uiTab = ScreenDebug;
+        state.dashboardFocused = true;
+    } else if (state.selectedSettingsIndex == 2) {
+        state.uiTab = ScreenStatus;
+        state.dashboardFocused = true;
+    } else if (state.selectedSettingsIndex == 3) {
+        state.uiTab = ScreenAdminTools;
+        state.dashboardFocused = true;
+    } else if (state.selectedSettingsIndex == 4) {
+        state.showCalibration = true;
+        state.showDiagnostics = false;
+        state.dashboardFocused = true;
+        state.usbDetail = "Placement editor";
+    } else if (state.selectedSettingsIndex == 5) {
+        state.uiTab = ScreenScreensaverSettings;
+        state.dashboardFocused = true;
+    } else if (state.selectedSettingsIndex == 6) {
+        state.uiTab = ScreenFontSettings;
+        state.dashboardFocused = true;
+    } else if (state.selectedSettingsIndex == 7) {
+        state.uiTab = ScreenFontDebug;
+        state.dashboardFocused = true;
+    } else if (state.selectedSettingsIndex == 8) {
+        state.uiTab = ScreenGuiOptions;
+        state.dashboardFocused = true;
+    } else if (state.selectedSettingsIndex == 9) {
+        state.uiTab = ScreenMidiPlayer;
+        state.dashboardFocused = true;
+        state.midiCommand = 3;
+    } else if (state.selectedSettingsIndex == 10) {
+        state.uiTab = ScreenUsbTools;
+        state.dashboardFocused = true;
+    } else if (state.selectedSettingsIndex == 11) {
+        if (state.clearMessagesArmed) {
+            state.messages.clear();
+            state.messageRevision++;
+            state.textMessageCount = 0;
+            state.selectedMessageIndex = 0;
+            state.selectedChatIndex = 0;
+            state.scrollOffset = 0;
+            state.clearMessagesArmed = false;
+            state.usbStatus = "Messages cleared";
+            state.usbDetail = "messages.dat will save empty";
+        } else {
+            state.clearMessagesArmed = true;
+            state.usbStatus = "Confirm clear messages";
+            state.usbDetail = "Press A again on CLEAR MSGS";
+        }
+    } else if (state.selectedSettingsIndex == 12) {
+        state.networkRequested = true;
+    }
+}
+
+void activateScreensaverSettingsSelection(AppState &state) {
+    if (state.selectedScreensaverIndex == 0) {
+        state.screensaverMode = (state.screensaverMode + 1) % 3;
+    } else if (state.selectedScreensaverIndex == 1) {
+        state.screensaverSpeed = (state.screensaverSpeed + 1) % 6;
+    } else if (state.selectedScreensaverIndex == 2) {
+        gScreensaverIdleFrames = ScreensaverIdleFrames;
+        gScreensaverActive = true;
+        gScreensaverDismissBlockFrames = 30;
+        state.screensaverActive = true;
+        state.usbDetail = "Screensaver test";
+        noteScreensaver(state, "start test");
+    }
+    saveGuiConfig(state);
+}
+
+void activateFontSettingsSelection(AppState &state) {
+    if (state.selectedFontIndex == 0) {
+        state.fontStyle = (state.fontStyle + 1) % FontStyleCount;
+        saveGuiConfig(state);
+    } else if (state.selectedFontIndex == 1) {
+        state.fontSize = (state.fontSize + 1) % (FontSizeMax + 1);
+        saveGuiConfig(state);
+    } else if (state.selectedFontIndex == 2) {
+        state.uiTab = ScreenFontDebug;
+        state.dashboardFocused = true;
+    }
+}
+
+void activateGuiOptionSelection(AppState &state) {
+    if (state.selectedGuiOptionIndex >= 0 && state.selectedGuiOptionIndex < PrimaryTabCount) {
+        state.menuEnabled[state.selectedGuiOptionIndex] = !state.menuEnabled[state.selectedGuiOptionIndex];
+        bool any = false;
+        for (int i = 0; i < PrimaryTabCount; ++i) any = any || state.menuEnabled[i];
+        if (!any) state.menuEnabled[ScreenSettings] = true;
+        if (state.uiTab < PrimaryTabCount && !menuTabEnabled(state, state.uiTab)) {
+            state.uiTab = firstEnabledPrimaryTab(state);
+        }
+    } else if (state.selectedGuiOptionIndex == 6) {
+        state.debugEnabled = !state.debugEnabled;
+    } else if (state.selectedGuiOptionIndex == 7) {
+        state.pointerEnabled = !state.pointerEnabled;
+    } else if (state.selectedGuiOptionIndex == 8) {
+        state.midiRepeat = !state.midiRepeat;
+    }
+    saveGuiConfig(state);
+    state.usbDetail = "GUI option saved";
+}
+
+void activateUsbToolSelection(AppState &state) {
+    state.usbCommand = state.selectedUsbToolIndex + 1;
+    state.usbDetail = "USB tool queued";
+}
+
+void activateAdminToolSelection(AppState &state) {
+    state.adminCommand = state.selectedAdminToolIndex + 1;
+    state.usbDetail = "Admin action queued";
+}
+
+PullBarState pullBarState(const AppState &state, int panelHeight) {
+    PullBarState pull;
+    if (state.composingMessage && state.uiTab == ScreenChatDetail) {
+        const std::vector<KeyboardKey> keys = keyboardKeys(&state);
+        const int keyboardH = chatKeyboardHeight(panelHeight);
+        const int keyH = 21;
+        const int visibleRows = std::max(1, (keyboardH - 50) / (keyH + 5));
+        const int totalRows = (static_cast<int>(keys.size()) + KeyboardCols - 1) / KeyboardCols;
+        const int cursorRow = state.keyboardCursor / KeyboardCols;
+        pull.up = cursorRow > 0;
+        pull.down = totalRows > visibleRows && cursorRow + 1 < totalRows;
+        return pull;
+    }
+    if (state.uiTab == ScreenNodeOptions || state.uiTab == ScreenMap) {
+        const int visible = nodeVisibleRows(panelHeight);
+        pull.up = state.selectedNodeIndex > 0;
+        pull.down = static_cast<int>(state.knownNodes.size()) > visible &&
+                    state.selectedNodeIndex + 1 < static_cast<int>(state.knownNodes.size());
+    } else if (state.uiTab == ScreenChats) {
+        const int total = static_cast<int>(chatEntries(state).size());
+        const int visible = chatEntryVisibleRows(panelHeight);
+        pull.up = state.selectedChatIndex > 0;
+        pull.down = total > visible && state.selectedChatIndex + 1 < total;
+    } else if (state.uiTab == ScreenChannels) {
+        const int total = std::max(8, static_cast<int>(state.channels.size()));
+        pull.up = state.selectedChannelIndex > 0;
+        pull.down = state.selectedChannelIndex + 1 < total;
+    } else if (state.uiTab == ScreenSettings) {
+        const int visible = settingsVisibleRows(panelHeight);
+        pull.up = state.selectedSettingsIndex > 0;
+        pull.down = SettingsRowCount > visible && state.selectedSettingsIndex + 1 < SettingsRowCount;
+    } else if (state.uiTab == ScreenGuiOptions) {
+        pull.up = state.selectedGuiOptionIndex > 0;
+        pull.down = state.selectedGuiOptionIndex < 8;
+    } else if (state.uiTab == ScreenMidiPlayer) {
+        const int visible = midiVisibleRows(panelHeight);
+        pull.up = state.selectedMidiIndex > 0;
+        pull.down = static_cast<int>(state.midiFiles.size()) > visible &&
+                    state.selectedMidiIndex + 1 < static_cast<int>(state.midiFiles.size());
+    } else if (state.uiTab == ScreenUsbTools) {
+        pull.up = state.selectedUsbToolIndex > 0;
+        pull.down = state.selectedUsbToolIndex + 1 < UsbToolRowCount;
+    } else if (state.uiTab == ScreenAdminTools) {
+        pull.up = state.selectedAdminToolIndex > 0;
+        pull.down = state.selectedAdminToolIndex + 1 < AdminToolRowCount;
+    } else if (state.uiTab == ScreenChatDetail) {
+        const int maxScroll = std::max(0, chatDetailMessageCount(state) - chatDetailVisibleCount(state));
+        pull.up = state.scrollOffset < maxScroll;
+        pull.down = state.scrollOffset > 0;
+    } else if (state.uiTab == ScreenLog) {
+        pull.up = state.scrollOffset + PageRows < static_cast<int>(state.streamEvents.size());
+        pull.down = state.scrollOffset > 0;
+    } else if (state.uiTab == ScreenDebug) {
+        pull.up = state.scrollOffset + 1 < static_cast<int>(state.debugPackets.size());
+        pull.down = state.scrollOffset > 0;
+    }
+    return pull;
+}
+
+bool applyPullBar(AppState &state, int direction, int panelHeight) {
+    const PullBarState pull = pullBarState(state, panelHeight);
+    if (direction < 0 && !pull.up) return false;
+    if (direction > 0 && !pull.down) return false;
+    if (state.composingMessage && state.uiTab == ScreenChatDetail) {
+        const std::vector<KeyboardKey> keys = keyboardKeys(&state);
+        if (keys.empty()) return false;
+        state.keyboardCursor = direction < 0
+            ? std::max(0, state.keyboardCursor - KeyboardCols)
+            : std::min(static_cast<int>(keys.size()) - 1, state.keyboardCursor + KeyboardCols);
+    } else if (state.uiTab == ScreenNodeOptions || state.uiTab == ScreenMap) {
+        state.selectedNodeIndex = std::max(0, std::min(static_cast<int>(state.knownNodes.size()) - 1,
+                                                       state.selectedNodeIndex + direction));
+    } else if (state.uiTab == ScreenChats) {
+        const int total = static_cast<int>(chatEntries(state).size());
+        state.selectedChatIndex = std::max(0, std::min(total - 1, state.selectedChatIndex + direction));
+    } else if (state.uiTab == ScreenChannels) {
+        const int total = std::max(8, static_cast<int>(state.channels.size()));
+        state.selectedChannelIndex = std::max(0, std::min(total - 1, state.selectedChannelIndex + direction));
+    } else if (state.uiTab == ScreenSettings) {
+        state.selectedSettingsIndex = std::max(0, std::min(SettingsRowCount - 1, state.selectedSettingsIndex + direction));
+        state.clearMessagesArmed = false;
+    } else if (state.uiTab == ScreenGuiOptions) {
+        state.selectedGuiOptionIndex = std::max(0, std::min(8, state.selectedGuiOptionIndex + direction));
+    } else if (state.uiTab == ScreenMidiPlayer) {
+        const int total = static_cast<int>(state.midiFiles.size());
+        state.selectedMidiIndex = std::max(0, std::min(total - 1, state.selectedMidiIndex + direction));
+    } else if (state.uiTab == ScreenUsbTools) {
+        state.selectedUsbToolIndex = std::max(0, std::min(UsbToolRowCount - 1, state.selectedUsbToolIndex + direction));
+    } else if (state.uiTab == ScreenAdminTools) {
+        state.selectedAdminToolIndex = std::max(0, std::min(AdminToolRowCount - 1, state.selectedAdminToolIndex + direction));
+    } else if (state.uiTab == ScreenChatDetail) {
+        const int maxScroll = std::max(0, chatDetailMessageCount(state) - chatDetailVisibleCount(state));
+        state.scrollOffset = std::max(0, std::min(maxScroll, state.scrollOffset + (direction < 0 ? 1 : -1)));
+    } else if (state.uiTab == ScreenLog || state.uiTab == ScreenDebug) {
+        state.scrollOffset = std::max(0, state.scrollOffset + (direction < 0 ? 1 : -1));
+    } else {
+        return false;
+    }
+    return true;
+}
+
 bool handlePointerClick(AppState &state) {
     if (!state.pointerVisible) return false;
     const int px = state.pointerX;
@@ -286,6 +556,24 @@ bool handlePointerClick(AppState &state) {
     const GuiZone &content = zone("content");
     const int contentX = pxCol(2) - 6 + content.x;
     const int contentY = pxRow(9) - 4 + content.y;
+    if (pointInRect(px, py, contentX, contentY, content.w, content.h)) {
+        const PullBarState pull = pullBarState(state, content.h);
+        const int pullX = contentX + content.w - 23;
+        const int pullY = contentY + 36;
+        const int pullH = std::max(48, content.h - 70);
+        if ((pull.up || pull.down) && pointInRect(px, py, pullX - 6, pullY, 30, pullH)) {
+            if (py < pullY + 30 && applyPullBar(state, -1, content.h)) {
+                state.dashboardFocused = true;
+                state.usbDetail = "Pointer pull up";
+                return true;
+            }
+            if (py >= pullY + pullH - 30 && applyPullBar(state, 1, content.h)) {
+                state.dashboardFocused = true;
+                state.usbDetail = "Pointer pull down";
+                return true;
+            }
+        }
+    }
     if (handlePointerKeyboardClick(state, px, py, contentX, contentY, content.w, content.h)) {
         return true;
     }
@@ -324,7 +612,8 @@ bool handlePointerClick(AppState &state) {
         if (row >= 0 && selected >= 0 && selected < SettingsRowCount) {
             state.selectedSettingsIndex = selected;
             state.dashboardFocused = true;
-            state.usbDetail = "Pointer selected setting";
+            state.usbDetail = "Pointer setting";
+            activateSettingsSelection(state);
             return true;
         }
     } else if (state.uiTab == ScreenScreensaverSettings) {
@@ -332,7 +621,8 @@ bool handlePointerClick(AppState &state) {
         if (row >= 0 && row <= 2) {
             state.selectedScreensaverIndex = row;
             state.dashboardFocused = true;
-            state.usbDetail = "Pointer selected screensaver row";
+            state.usbDetail = "Pointer screensaver row";
+            activateScreensaverSettingsSelection(state);
             return true;
         }
     } else if (state.uiTab == ScreenFontSettings) {
@@ -340,8 +630,89 @@ bool handlePointerClick(AppState &state) {
         if (row >= 0 && row <= 2) {
             state.selectedFontIndex = row;
             state.dashboardFocused = true;
-            state.usbDetail = "Pointer selected font row";
+            state.usbDetail = "Pointer font row";
+            activateFontSettingsSelection(state);
             return true;
+        }
+    } else if (state.uiTab == ScreenGuiOptions) {
+        const int row = (py - (contentY + 42)) / 31;
+        if (row >= 0 && row < PrimaryTabCount + 3) {
+            state.selectedGuiOptionIndex = row;
+            state.dashboardFocused = true;
+            state.usbDetail = "Pointer GUI option";
+            activateGuiOptionSelection(state);
+            return true;
+        }
+    } else if (state.uiTab == ScreenUsbTools) {
+        const int row = (py - (contentY + 62)) / UsbToolRowH;
+        if (row >= 0 && row < UsbToolRowCount) {
+            state.selectedUsbToolIndex = row;
+            state.dashboardFocused = true;
+            state.usbDetail = "Pointer USB tool";
+            activateUsbToolSelection(state);
+            return true;
+        }
+    } else if (state.uiTab == ScreenAdminTools) {
+        const int row = (py - (contentY + 62)) / AdminToolRowH;
+        if (row >= 0 && row < AdminToolRowCount) {
+            state.selectedAdminToolIndex = row;
+            state.dashboardFocused = true;
+            state.usbDetail = "Pointer admin action";
+            activateAdminToolSelection(state);
+            return true;
+        }
+    } else if (state.uiTab == ScreenChannels) {
+        const int first = std::max(0, state.selectedChannelIndex - 2);
+        const int rowH = 35;
+        const int gap = 6;
+        const int listTop = contentY + 68;
+        const int row = (py - listTop) / (rowH + gap);
+        const int index = first + row;
+        if (row >= 0 && index >= 0 && index < 8) {
+            const int rowY = listTop + row * (rowH + gap);
+            if (py >= rowY && py < rowY + rowH) {
+                bool configured = false;
+                const ChannelSummary ch = channelSlot(state, index, &configured);
+                const bool fallbackPrimary = index == 0 && !state.channelName.empty();
+                const bool enabled = ch.role != 0 || fallbackPrimary;
+                state.selectedChannelIndex = index;
+                state.dashboardFocused = true;
+                state.usbDetail = enabled ? "Pointer channel chat" : "Pointer disabled channel";
+                if (enabled) {
+                    ChatEntry entry;
+                    entry.channel = true;
+                    entry.channelIndex = index;
+                    entry.title = channelDisplayName(state, index);
+                    openChatEntry(state, entry);
+                }
+                return true;
+            }
+        }
+    } else if (state.uiTab == ScreenChats) {
+        const std::vector<ChatEntry> entries = chatEntries(state);
+        if (!entries.empty()) {
+            const int rowH = 74;
+            const int gap = 8;
+            const int listTop = contentY + 68;
+            const int listBottom = contentY + content.h - 34;
+            const int visibleRows = std::max(1, (listBottom - listTop + gap) / (rowH + gap));
+            const int unreadIndex = newestUnreadChatIndex(entries);
+            const int selected = unreadIndex >= 0 ? unreadIndex :
+                std::max(0, std::min(state.selectedChatIndex, static_cast<int>(entries.size()) - 1));
+            int first = selected - visibleRows / 2;
+            first = std::max(0, std::min(first, std::max(0, static_cast<int>(entries.size()) - visibleRows)));
+            const int row = (py - listTop) / (rowH + gap);
+            const int index = first + row;
+            if (row >= 0 && index >= 0 && index < static_cast<int>(entries.size())) {
+                const int rowY = listTop + row * (rowH + gap);
+                if (py >= rowY && py < rowY + rowH) {
+                    state.selectedChatIndex = index;
+                    state.dashboardFocused = true;
+                    state.usbDetail = "Pointer chat";
+                    openChatEntry(state, entries[static_cast<size_t>(index)]);
+                    return true;
+                }
+            }
         }
     }
     return false;
@@ -647,11 +1018,11 @@ std::string timeText(uint32_t t) {
 }
 
 std::string nowTimeText() {
-    return timeText(static_cast<uint32_t>(std::time(nullptr)));
+    return timeText(currentUnixTime());
 }
 
 std::string nowDateText() {
-    const time_t tt = std::time(nullptr);
+    const time_t tt = static_cast<time_t>(currentUnixTime());
     tm *info = std::localtime(&tt);
     if (!info) return "date waiting";
     char buf[24];
@@ -680,7 +1051,7 @@ std::string integerOrWaiting(int32_t value, const char *suffix = "") {
 
 std::string lastHeardText(uint32_t t) {
     if (t == 0) return "LAST UNKNOWN";
-    const uint32_t now = static_cast<uint32_t>(std::time(nullptr));
+    const uint32_t now = currentUnixTime();
     if (t > now) return "JUST NOW";
     const uint32_t age = now - t;
     if (age < 60) return std::to_string(age) + " SEC AGO";
@@ -698,11 +1069,41 @@ std::string nodeConnectionText(const NodeSummary &node) {
     return "UNKNOWN";
 }
 
+std::string nodeBestName(const NodeSummary &node);
+std::string nodeNameForId(const AppState &state, uint32_t id, const std::string &fallback);
+bool looksLikeNodeIdText(const std::string &text);
+uint32_t parseNodeIdText(const std::string &text);
+
 std::string senderText(const Message &m) {
     if (!m.senderName.empty()) {
         const std::string name = displayTextWithoutIconWords(m.senderName);
         if (!name.empty()) return name;
     }
+    if (!m.senderId.empty()) return m.senderId;
+    return nodeId(m.from);
+}
+
+std::string senderText(const AppState &state, const Message &m) {
+    const uint32_t senderIdValue = parseNodeIdText(m.senderId);
+    const uint32_t senderNameValue = parseNodeIdText(m.senderName);
+    const uint32_t candidates[] = {
+        m.from,
+        senderIdValue,
+        senderNameValue,
+        (m.to != BroadcastNode ? m.to : 0)
+    };
+    for (uint32_t id : candidates) {
+        if (id == 0) continue;
+        if (!state.myNodeId.empty() && nodeId(id) == state.myNodeId && m.outgoing) continue;
+        const std::string known = nodeNameForId(state, id, "");
+        if (!known.empty() && !looksLikeNodeIdText(known)) return known;
+    }
+    if (m.outgoing) return "Me";
+    if (!m.senderName.empty()) {
+        const std::string name = displayTextWithoutIconWords(m.senderName);
+        if (!name.empty() && !looksLikeNodeIdText(name)) return name;
+    }
+    if (m.from != 0) return nodeId(m.from);
     if (!m.senderId.empty()) return m.senderId;
     return nodeId(m.from);
 }
@@ -745,14 +1146,6 @@ bool isIncomingMessage(const Message &m) {
     return !m.outgoing && m.from != 0;
 }
 
-uint32_t incomingMessageCount(const AppState &state) {
-    uint32_t count = 0;
-    for (const Message &m : state.messages) {
-        if (isIncomingMessage(m)) ++count;
-    }
-    return count;
-}
-
 uint32_t unreadIncomingCount(const AppState &state) {
     uint32_t count = 0;
     for (const Message &m : state.messages) {
@@ -768,7 +1161,7 @@ bool messageIsUnreadIncoming(const Message &m) {
 std::string tickerText(const AppState &state) {
     if (state.messages.empty()) return "ACCESS: waiting for Meshtastic messages";
     const Message &m = state.messages.back();
-    return "ACCESS: " + senderText(m) + " - " + messageText(m);
+    return "ACCESS: " + senderText(state, m) + " - " + messageText(m);
 }
 
 std::string meshFileStatusText(const AppState &state) {
@@ -837,6 +1230,8 @@ int activePrimaryTab(const AppState &state) {
     }
     if (state.uiTab == ScreenScreensaverSettings || state.uiTab == ScreenFontSettings ||
         state.uiTab == ScreenFontDebug || state.uiTab == ScreenMidiPlayer ||
+        state.uiTab == ScreenUsbTools ||
+        state.uiTab == ScreenAdminTools ||
         state.uiTab == ScreenGuiOptions) {
         return ScreenSettings;
     }
@@ -932,7 +1327,7 @@ std::string keyboardModeName(KeyboardMode mode) {
     case KeyboardMode::Lowercase: return "abc";
     case KeyboardMode::Uppercase: return "ABC";
     case KeyboardMode::Symbols: return "123";
-    case KeyboardMode::UnicodeBadges: return "Unicode";
+    case KeyboardMode::UnicodeBadges: return "Emoji";
     }
     return "abc";
 }
@@ -941,7 +1336,7 @@ std::string keyboardNextModeName(KeyboardMode mode) {
     switch (mode) {
     case KeyboardMode::Lowercase: return "ABC";
     case KeyboardMode::Uppercase: return "123";
-    case KeyboardMode::Symbols: return "Badges";
+    case KeyboardMode::Symbols: return "Emoji";
     case KeyboardMode::UnicodeBadges: return "abc";
     }
     return "ABC";
@@ -977,6 +1372,15 @@ std::string utf8FromCodepoint(uint32_t cp) {
     return out;
 }
 
+std::string utf8FromCodepoints(const uint32_t *cps, int count) {
+    std::string out;
+    for (int i = 0; i < count; ++i) {
+        if (cps[i] == 0) break;
+        out += utf8FromCodepoint(cps[i]);
+    }
+    return out;
+}
+
 KeyboardKey makeKey(KeyboardKeyType type, const std::string &label, const std::string &value = "",
                     uint32_t cp = 0, int span = 1) {
     KeyboardKey key;
@@ -989,7 +1393,19 @@ KeyboardKey makeKey(KeyboardKeyType type, const std::string &label, const std::s
 }
 
 KeyboardKey unicodeBadgeKey(const std::string &fallbackLabel, uint32_t cp) {
-    return makeKey(KeyboardKeyType::UnicodeBadge, fallbackLabel, utf8FromCodepoint(cp), cp);
+    KeyboardKey key = makeKey(KeyboardKeyType::UnicodeBadge, fallbackLabel, utf8FromCodepoint(cp), cp);
+    key.emojiCodepoints.push_back(cp);
+    return key;
+}
+
+KeyboardKey unicodeEmojiKey(const emoji::Icon &icon) {
+    KeyboardKey key = makeKey(KeyboardKeyType::UnicodeBadge, "emoji",
+                              utf8FromCodepoints(icon.codepoints, icon.length),
+                              icon.length == 1 ? icon.codepoints[0] : 0);
+    for (int i = 0; i < icon.length && i < emoji::MaxCodepoints; ++i) {
+        key.emojiCodepoints.push_back(icon.codepoints[i]);
+    }
+    return key;
 }
 
 KeyboardKey emptyKey() {
@@ -1027,9 +1443,8 @@ std::vector<KeyboardKey> keyboardKeys(const AppState *state) {
         std::vector<KeyboardKey> badgeKeys;
         badgeKeys.push_back(unicodeBadgeKey("radio", 0x1f4fb));
         for (int i = 0; i < emoji::IconCount; ++i) {
-            const uint32_t cp = emoji::Icons[i].codepoint;
-            if (cp == 0x1f4fb) continue;
-            badgeKeys.push_back(unicodeBadgeKey("U+", cp));
+            if (emoji::Icons[i].length == 1 && emoji::Icons[i].codepoints[0] == 0x1f4fb) continue;
+            badgeKeys.push_back(unicodeEmojiKey(emoji::Icons[i]));
         }
         for (size_t i = 0; i < badgeKeys.size(); i += KeyboardCols) {
             std::vector<KeyboardKey> row;
@@ -1162,6 +1577,10 @@ void clampState(AppState &state) {
     state.fontStyle = ((state.fontStyle % FontStyleCount) + FontStyleCount) % FontStyleCount;
     if (state.fontSize < 0) state.fontSize = 0;
     if (state.fontSize > FontSizeMax) state.fontSize = FontSizeMax;
+    if (state.selectedUsbToolIndex < 0) state.selectedUsbToolIndex = 0;
+    if (state.selectedUsbToolIndex >= UsbToolRowCount) state.selectedUsbToolIndex = UsbToolRowCount - 1;
+    if (state.selectedAdminToolIndex < 0) state.selectedAdminToolIndex = 0;
+    if (state.selectedAdminToolIndex >= AdminToolRowCount) state.selectedAdminToolIndex = AdminToolRowCount - 1;
     const int channelRows = std::max(8, static_cast<int>(state.channels.size()));
     if (state.selectedChannelIndex < 0) state.selectedChannelIndex = 0;
     if (state.selectedChannelIndex >= channelRows) state.selectedChannelIndex = channelRows - 1;
@@ -1180,7 +1599,11 @@ void clampState(AppState &state) {
 }
 
 std::string nodeNameForId(const AppState &state, uint32_t id, const std::string &fallback);
+std::string nodeBestName(const NodeSummary &node);
+std::string selfDisplayName(const AppState &state);
+std::string channelDisplayName(const AppState &state, int index);
 std::string directChatTitle(const AppState &state, uint32_t peer, const Message &m);
+uint32_t directPeerForMessage(const AppState &state, const Message &m);
 
 void setChatPeerFromMessage(AppState &state, const Message &m) {
     if (!m.direct) {
@@ -1191,12 +1614,7 @@ void setChatPeerFromMessage(AppState &state, const Message &m) {
             : m.channelName;
     } else {
         state.chatChannelIndex = -1;
-        uint32_t peer = m.from;
-        if (m.outgoing || m.from == 0 ||
-            (!state.myNodeId.empty() && (m.senderId == state.myNodeId || nodeId(m.from) == state.myNodeId))) {
-            peer = m.to;
-        }
-        if (peer == 0 || peer == BroadcastNode) peer = m.from;
+        const uint32_t peer = directPeerForMessage(state, m);
         state.chatPeerNodeId = nodeId(peer);
         state.chatPeerName = directChatTitle(state, peer, m);
     }
@@ -1481,6 +1899,34 @@ void line(int x0, int y0, int x1, int y1, uint16_t c) {
     }
 }
 
+void drawTriangleUp(int cx, int cy, int r, uint16_t c) {
+    for (int dy = 0; dy < r; ++dy) {
+        line(cx - dy, cy + dy, cx + dy, cy + dy, c);
+    }
+}
+
+void drawTriangleDown(int cx, int cy, int r, uint16_t c) {
+    for (int dy = 0; dy < r; ++dy) {
+        line(cx - dy, cy - dy, cx + dy, cy - dy, c);
+    }
+}
+
+void drawPullBar(int x, int y, int w, int h, const PullBarState &pull) {
+    if (!pull.up && !pull.down) return;
+    const int barW = 18;
+    const int bx = x + w - barW - 5;
+    const int by = y + 36;
+    const int bh = std::max(48, h - 70);
+    const uint16_t cyan = rgb565(51, 215, 238);
+    const uint16_t green = rgb565(77, 232, 141);
+    const uint16_t muted = rgb565(45, 70, 78);
+    fillRect(bx, by, barW, bh, rgb565(8, 20, 28), 210);
+    strokeRect(bx, by, barW, bh, cyan);
+    fillRect(bx + 4, by + 30, barW - 8, std::max(1, bh - 60), rgb565(17, 68, 81), 230);
+    drawTriangleUp(bx + barW / 2, by + 9, 6, pull.up ? green : muted);
+    drawTriangleDown(bx + barW / 2, by + bh - 9, 6, pull.down ? green : muted);
+}
+
 void drawDeliveryCheck(int x, int y, uint16_t c) {
     line(x, y + 6, x + 4, y + 10, c);
     line(x + 1, y + 6, x + 5, y + 10, c);
@@ -1670,6 +2116,7 @@ void drawTinyText(const std::string &text, int x, int y, int scale, uint16_t c) 
     const int cellW = rounded_font::CellW[size];
     const int cellH = rounded_font::CellH[size];
     const uint16_t shadow = rgb565(0, 5, 8);
+    const int drawY = y + 2;
     int gx = x;
     for (size_t i = 0; i < safe.size(); ++i) {
         const int idx = size * rounded_font::GlyphCount + roundedGlyphIndex(safe[i]);
@@ -1678,7 +2125,7 @@ void drawTinyText(const std::string &text, int x, int y, int scale, uint16_t c) 
             for (int yy = 0; yy < cellH; ++yy) {
                 for (int xx = 0; xx < cellW; ++xx) {
                     const int a = rounded_font::Alpha[off + yy * cellW + xx];
-                    if (a) blendFontPixel(gx + xx + 1, y + yy + 1, shadow, std::min(160, a));
+                    if (a) blendFontPixel(gx + xx + 1, drawY + yy + 1, shadow, std::min(160, a));
                 }
             }
         }
@@ -1686,9 +2133,9 @@ void drawTinyText(const std::string &text, int x, int y, int scale, uint16_t c) 
             for (int xx = 0; xx < cellW; ++xx) {
                 const int a = rounded_font::Alpha[off + yy * cellW + xx];
                 if (a) {
-                    blendFontPixel(gx + xx, y + yy, c, a);
-                    if (gUiFontStyle == 2 && a > 180) blendFontPixel(gx + xx, y + yy, rgb565(255, 255, 255), 38);
-                    if (gUiFontStyle == 3 && a > 96) blendFontPixel(gx + xx + 1, y + yy, c, a / 2);
+                    blendFontPixel(gx + xx, drawY + yy, c, a);
+                    if (gUiFontStyle == 2 && a > 180) blendFontPixel(gx + xx, drawY + yy, rgb565(255, 255, 255), 38);
+                    if (gUiFontStyle == 3 && a > 96) blendFontPixel(gx + xx + 1, drawY + yy, c, a / 2);
                 }
             }
         }
@@ -1760,7 +2207,24 @@ void drawBitmapIcon(const uint32_t *rows, int x, int y, int w, int h, uint16_t c
 
 const emoji::Icon *emojiIcon(uint32_t cp) {
     for (int i = 0; i < emoji::IconCount; ++i) {
-        if (emoji::Icons[i].codepoint == cp) return &emoji::Icons[i];
+        if (emoji::Icons[i].length == 1 && emoji::Icons[i].codepoints[0] == cp) return &emoji::Icons[i];
+    }
+    return nullptr;
+}
+
+const emoji::Icon *emojiIconSequence(const std::vector<uint32_t> &cps) {
+    if (cps.empty() || cps.size() > static_cast<size_t>(emoji::MaxCodepoints)) return nullptr;
+    for (int i = 0; i < emoji::IconCount; ++i) {
+        const emoji::Icon &icon = emoji::Icons[i];
+        if (icon.length != static_cast<uint8_t>(cps.size())) continue;
+        bool match = true;
+        for (size_t j = 0; j < cps.size(); ++j) {
+            if (icon.codepoints[j] != cps[j]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return &icon;
     }
     return nullptr;
 }
@@ -2287,13 +2751,22 @@ void drawUserIconGlyphs(const std::vector<uint32_t> &icons, int x, int y, int w,
         const int count = std::min(3, static_cast<int>(icons.size()));
         const int scale = std::max(1, std::min(2, std::min(w, h) / 18));
         const int icon = 8 * scale;
+        const int gap = std::max(1, scale);
+        const int centerX = x + w / 2;
+        const int centerY = y + h / 2;
         if (count == 2) {
-            drawPixelIcon(icons[0], x + 1, y + (h - icon) / 2, scale, ink);
-            drawPixelIcon(icons[1], x + w - icon - 1, y + (h - icon) / 2, scale, ink);
+            const int totalW = icon * 2;
+            const int startX = centerX - totalW / 2;
+            drawPixelIcon(icons[0], startX, centerY - icon / 2, scale, ink);
+            drawPixelIcon(icons[1], startX + icon, centerY - icon / 2, scale, ink);
         } else {
-            drawPixelIcon(icons[0], x + 1, y + 1, scale, ink);
-            drawPixelIcon(icons[1], x + w - icon - 1, y + 1, scale, ink);
-            drawPixelIcon(icons[2], x + (w - icon) / 2, y + h - icon - 1, scale, ink);
+            const int overlap = std::max(3, icon / 3);
+            const int step = std::max(1, icon - overlap);
+            const int startX = centerX - icon / 2 - step;
+            const int rowY = centerY - icon / 2;
+            drawPixelIcon(icons[0], startX, rowY - scale, scale, ink);
+            drawPixelIcon(icons[1], startX + step, rowY + scale, scale, ink);
+            drawPixelIcon(icons[2], startX + step * 2, rowY - scale, scale, ink);
         }
         return;
     }
@@ -2302,11 +2775,23 @@ void drawUserIconGlyphs(const std::vector<uint32_t> &icons, int x, int y, int w,
         return;
     }
     const int count = std::min(3, static_cast<int>(icons.size()));
-    const int sub = std::max(12, std::min(16, std::min(w, h) / 2));
-    const int px[3] = {x + 1, x + w - sub - 1, x + (w - sub) / 2};
-    const int py[3] = {y + 2, y + 2, y + h - sub - 2};
-    for (int i = 0; i < count; ++i) {
-        drawUserIconGlyph(icons[static_cast<size_t>(i)], px[i], py[i], sub, sub, ink);
+    const int sub = std::max(15, std::min(22, std::min(w, h) / 2 + 2));
+    const int gap = std::max(1, sub / 8);
+    const int centerX = x + w / 2;
+    const int centerY = y + h / 2;
+    if (count == 2) {
+        const int totalW = sub * 2;
+        const int startX = centerX - totalW / 2;
+        drawUserIconGlyph(icons[0], startX, centerY - sub / 2, sub, sub, ink);
+        drawUserIconGlyph(icons[1], startX + sub, centerY - sub / 2, sub, sub, ink);
+    } else {
+        const int overlap = std::max(4, sub / 3);
+        const int step = std::max(1, sub - overlap);
+        const int startX = centerX - sub / 2 - step;
+        const int rowY = centerY - sub / 2;
+        drawUserIconGlyph(icons[0], startX, rowY - gap, sub, sub, ink);
+        drawUserIconGlyph(icons[1], startX + step, rowY + gap, sub, sub, ink);
+        drawUserIconGlyph(icons[2], startX + step * 2, rowY - gap, sub, sub, ink);
     }
 }
 
@@ -2385,11 +2870,11 @@ std::string screensaverDisplayText(const AppState &state) {
     if (mode == 1) {
         for (int i = static_cast<int>(state.messages.size()) - 1; i >= 0; --i) {
             const Message &m = state.messages[static_cast<size_t>(i)];
-            if (messageIsUnreadIncoming(m)) return senderText(m) + ": " + messageText(m);
+            if (messageIsUnreadIncoming(m)) return senderText(state, m) + ": " + messageText(m);
         }
         for (int i = static_cast<int>(state.messages.size()) - 1; i >= 0; --i) {
             const Message &m = state.messages[static_cast<size_t>(i)];
-            if (isIncomingMessage(m)) return senderText(m) + ": " + messageText(m);
+            if (isIncomingMessage(m)) return senderText(state, m) + ": " + messageText(m);
         }
         return "No unread messages";
     }
@@ -2631,7 +3116,8 @@ void drawGraphicalHeader(const AppState &state, int x, int y, int w, int h) {
                     "  TEXT " + std::to_string(static_cast<int>(state.messages.size())),
                     x + pad, y + 25, w - pad * 2, 1, rgb565(180, 205, 212));
     const int signalW = 72;
-    drawTinyTextFit(tickerText(state), x + pad, y + 40, std::max(50, w - pad * 2 - signalW), 1, green);
+    drawTinyTextFit(tickerText(state) + "  ME " + selfDisplayName(state),
+                    x + pad, y + 40, std::max(50, w - pad * 2 - signalW), 1, green);
     drawSignalBars(x + w - pad - 52, y + 60, cyan);
     const int barY = std::min(y + h - 8, y + 56);
     fillRect(x + 8, barY, w - 16, 5, rgb565(20, 78, 83), 255);
@@ -2728,7 +3214,7 @@ void drawHomePanel(const AppState &state, int x, int y, int w, int h) {
         fillRect(x + 14, y + h - 64, w - 28, 50, rgb565(18, 39, 47), 230);
         strokeRect(x + 14, y + h - 64, w - 28, 50, rgb565(35, 99, 118));
         drawTinyTextFit("LATEST", x + 24, y + h - 54, w - 48, 1, rgb565(77, 232, 141));
-        drawTinyTextFit(timeText(m.rxTime) + " " + (m.direct ? "DM " : "CH ") + senderText(m),
+        drawTinyTextFit(timeText(m.rxTime) + " " + (m.direct ? "DM " : "CH ") + senderText(state, m),
                         x + 24, y + h - 38, w - 48, 1, rgb565(235, 244, 244));
         drawTinyTextFit(messageText(m), x + 24, y + h - 23, w - 48, 1, rgb565(235, 244, 244));
     }
@@ -2742,16 +3228,19 @@ void drawNodeCard(const NodeSummary &node, bool selected, int x, int y, int w, i
     const int avatar = std::min(76, h - 10);
     const int ax = x + 12;
     const int ay = y + (h - avatar) / 2;
-    const std::vector<uint32_t> icons = nodeIconCodepoints(node, 3);
     drawNodeAvatar(node, ax, ay, avatar, avatar, !selected);
     const int tx = ax + avatar + 18;
     const int rightW = 104;
-    const std::string title = node.name.empty() ? node.nodeId : node.name;
+    const std::string friendly = nodeBestName(node);
+    const std::string idText = node.nodeId.empty() ? nodeId(node.id) : node.nodeId;
+    const std::string title = friendly.empty() ? idText : friendly;
     drawTinyTextFit(title, tx, y + 12, std::max(20, w - (tx - x) - rightW), 1, rgb565(245, 248, 248));
-    drawTinyTextFit(node.shortName.empty() || !icons.empty() ? node.nodeId : node.shortName + "  " + node.nodeId,
-                    tx, y + 32, std::max(20, w - (tx - x) - rightW), 1, rgb565(210, 222, 224));
-    if (!node.hardwareName.empty()) {
-        drawTinyTextFit(node.hardwareName, tx, y + 54, std::max(20, w - (tx - x) - rightW), 1, rgb565(180, 205, 212));
+    const int detailY = friendly.empty() ? y + 32 : y + 38;
+    if (friendly.empty() && !idText.empty() && idText != title) {
+        drawTinyTextFit(idText, tx, y + 32, std::max(20, w - (tx - x) - rightW), 1, rgb565(210, 222, 224));
+    }
+    if (!node.hardwareName.empty() && node.hardwareName != title) {
+        drawTinyTextFit(node.hardwareName, tx, detailY, std::max(20, w - (tx - x) - rightW), 1, rgb565(180, 205, 212));
     }
     std::string top = nodeConnectionText(node);
     std::string mid = lastHeardText(node.lastHeard);
@@ -2785,7 +3274,7 @@ void drawNodesPanel(const AppState &state, int x, int y, int w, int h) {
     drawBitmapIcon(icons::Node, x + 12, y + 5, 24, 24, rgb565(235, 244, 244));
     drawTinyTextFit(online, x + 44, y + 10, w - 58, 1, rgb565(235, 244, 244));
     if (state.knownNodes.empty()) {
-        drawTinyTextFit("WAITING FOR NODE INFO FROM THE RAK", x + 22, y + 44, w - 44, 1, rgb565(235, 244, 244));
+        drawTinyTextFit("WAITING FOR NODE INFO FROM the radio", x + 22, y + 44, w - 44, 1, rgb565(235, 244, 244));
         return;
     }
     const int cardH = 86;
@@ -2806,7 +3295,7 @@ void drawNodesPanel(const AppState &state, int x, int y, int w, int h) {
     }
 }
 
-ChannelSummary channelSlot(const AppState &state, int index, bool *configured = nullptr) {
+ChannelSummary channelSlot(const AppState &state, int index, bool *configured) {
     for (const auto &candidate : state.channels) {
         if (candidate.index == index) {
             if (configured) *configured = true;
@@ -2829,37 +3318,125 @@ std::string channelDisplayName(const AppState &state, int index) {
     return configured ? ("Channel " + std::to_string(index)) : std::to_string(index);
 }
 
+std::string cleanDisplayNameCandidate(const std::string &text) {
+    const std::string cleaned = displayTextWithoutIconWords(text);
+    if (cleaned.empty() || cleaned == "Me" || looksLikeNodeIdText(cleaned)) return "";
+    int alnum = 0;
+    int noisy = 0;
+    for (unsigned char c : cleaned) {
+        if (std::isalnum(c)) {
+            ++alnum;
+        } else if (c != ' ' && c != '-' && c != '_' && c != '.' &&
+                   c != '\'' && c != '&' && c != '[' && c != ']') {
+            ++noisy;
+        }
+    }
+    if (alnum < 2) return "";
+    if (noisy > std::max(3, alnum / 2)) return "";
+    return cleaned;
+}
+
+std::string nodeBestName(const NodeSummary &node) {
+    std::string name = cleanDisplayNameCandidate(node.name);
+    if (!name.empty()) return name;
+    return "";
+}
+
 std::string nodeNameForId(const AppState &state, uint32_t id, const std::string &fallback) {
     for (const auto &node : state.knownNodes) {
         if (node.id == id || node.nodeId == nodeId(id)) {
-            const std::string longName = displayTextWithoutIconWords(node.name);
-            const std::string shortName = displayTextWithoutIconWords(node.shortName);
-            if (!longName.empty()) return longName;
-            if (!shortName.empty()) return shortName;
+            const std::string best = nodeBestName(node);
+            if (!best.empty()) return best;
             if (!node.nodeId.empty()) return node.nodeId;
         }
     }
-    const std::string cleanedFallback = displayTextWithoutIconWords(fallback);
+    const std::string cleanedFallback = cleanDisplayNameCandidate(fallback);
     return cleanedFallback.empty() ? nodeId(id) : cleanedFallback;
 }
 
+std::string selfDisplayName(const AppState &state) {
+    for (const auto &node : state.knownNodes) {
+        if (node.isMine || (!state.myNodeId.empty() && node.nodeId == state.myNodeId)) {
+            const std::string best = nodeBestName(node);
+            if (!best.empty()) return best;
+        }
+    }
+    const std::string local = cleanDisplayNameCandidate(state.nodeName);
+    if (!local.empty() && local != "Unknown" && local != "waiting") return local;
+    return state.myNodeId.empty() ? "waiting" : state.myNodeId;
+}
+
 bool looksLikeNodeIdText(const std::string &text) {
-    if (text.size() != 9 || text[0] != '!') return false;
-    for (size_t i = 1; i < text.size(); ++i) {
+    const size_t start = (!text.empty() && text[0] == '!') ? 1 : 0;
+    const size_t digits = text.size() - start;
+    if (digits != 8) return false;
+    for (size_t i = start; i < text.size(); ++i) {
         if (!std::isxdigit(static_cast<unsigned char>(text[i]))) return false;
     }
     return true;
 }
 
+uint32_t parseNodeIdText(const std::string &text) {
+    if (!looksLikeNodeIdText(text)) return 0;
+    uint32_t value = 0;
+    const size_t start = (!text.empty() && text[0] == '!') ? 1 : 0;
+    for (size_t i = start; i < text.size(); ++i) {
+        const char c = text[i];
+        value <<= 4;
+        if (c >= '0' && c <= '9') value |= static_cast<uint32_t>(c - '0');
+        else if (c >= 'a' && c <= 'f') value |= static_cast<uint32_t>(c - 'a' + 10);
+        else if (c >= 'A' && c <= 'F') value |= static_cast<uint32_t>(c - 'A' + 10);
+    }
+    return value;
+}
+
+bool isLocalNodeId(const AppState &state, uint32_t id) {
+    return id != 0 && !state.myNodeId.empty() && nodeId(id) == state.myNodeId;
+}
+
+uint32_t directPeerForMessage(const AppState &state, const Message &m) {
+    const uint32_t senderIdValue = parseNodeIdText(m.senderId);
+    if (!m.outgoing) {
+        if (m.from != 0 && !isLocalNodeId(state, m.from)) return m.from;
+        if (senderIdValue != 0 && !isLocalNodeId(state, senderIdValue)) return senderIdValue;
+        if (m.to != 0 && m.to != BroadcastNode && !isLocalNodeId(state, m.to)) return m.to;
+    } else {
+        if (m.to != 0 && m.to != BroadcastNode && !isLocalNodeId(state, m.to)) return m.to;
+        if (senderIdValue != 0 && !isLocalNodeId(state, senderIdValue)) return senderIdValue;
+        if (m.from != 0 && !isLocalNodeId(state, m.from)) return m.from;
+    }
+    if (m.from != 0) return m.from;
+    if (m.to != 0 && m.to != BroadcastNode) return m.to;
+    return senderIdValue;
+}
+
 std::string directChatTitle(const AppState &state, uint32_t peer, const Message &m) {
+    for (const auto &node : state.knownNodes) {
+        if (node.id == peer || node.nodeId == nodeId(peer) ||
+            (!m.senderId.empty() && node.nodeId == m.senderId) ||
+            (m.from != 0 && (node.id == m.from || node.nodeId == nodeId(m.from))) ||
+            (m.to != 0 && m.to != BroadcastNode && (node.id == m.to || node.nodeId == nodeId(m.to)))) {
+            const std::string best = nodeBestName(node);
+            if (!best.empty()) return best;
+        }
+    }
     const std::string fromKnown = nodeNameForId(state, peer, "");
     if (!fromKnown.empty() && !looksLikeNodeIdText(fromKnown)) return fromKnown;
     if (!m.outgoing && m.from != 0 && !m.senderName.empty() && m.senderName != "Me" &&
         !looksLikeNodeIdText(m.senderName)) {
-        const std::string sender = displayTextWithoutIconWords(m.senderName);
+        const std::string sender = cleanDisplayNameCandidate(m.senderName);
         if (!sender.empty()) return sender;
     }
     return nodeId(peer);
+}
+
+bool betterChatTitle(const std::string &candidate, const std::string &current) {
+    const std::string c = cleanDisplayNameCandidate(candidate);
+    if (c.empty()) return false;
+    if (current.empty()) return true;
+    if (looksLikeNodeIdText(current) && !looksLikeNodeIdText(c)) return true;
+    if (current == "Me" && c != "Me") return true;
+    return false;
 }
 
 bool directMessageMatchesPeer(const AppState &state, const Message &m, const std::string &peerId) {
@@ -2893,34 +3470,10 @@ int chatDetailVisibleCount(const AppState &state) {
 
 std::vector<ChatEntry> chatEntries(const AppState &state) {
     std::vector<ChatEntry> entries;
-    auto pushChannel = [&](int index) {
-        ChatEntry e;
-        e.channel = true;
-        e.channelIndex = index;
-        e.title = channelDisplayName(state, index);
-        e.subtitle = "Group channel";
-        for (int i = 0; i < static_cast<int>(state.messages.size()); ++i) {
-            const Message &m = state.messages[static_cast<size_t>(i)];
-            if (m.direct || m.channelIndex != index) continue;
-            e.last = senderText(m) + ": " + messageText(m);
-            e.time = m.rxTime;
-            if (messageIsUnreadIncoming(m)) e.unread = true;
-        }
-        entries.push_back(e);
-    };
-
-    bool hasPrimary = false;
-    for (const auto &ch : state.channels) {
-        if (ch.role == 0) continue;
-        pushChannel(ch.index);
-        if (ch.index == 0) hasPrimary = true;
-    }
-    if (!hasPrimary) pushChannel(0);
-
     for (int i = 0; i < static_cast<int>(state.messages.size()); ++i) {
         const Message &m = state.messages[static_cast<size_t>(i)];
         if (!m.direct) continue;
-        const uint32_t peer = (m.from == 0 || m.senderId == state.myNodeId) ? m.to : m.from;
+        const uint32_t peer = directPeerForMessage(state, m);
         auto found = std::find_if(entries.begin(), entries.end(), [&](const ChatEntry &e) {
             return !e.channel && e.node == peer;
         });
@@ -2936,7 +3489,10 @@ std::vector<ChatEntry> chatEntries(const AppState &state) {
             e.unread = messageIsUnreadIncoming(m);
             entries.push_back(e);
         } else {
-            found->title = directChatTitle(state, peer, m);
+            const std::string title = directChatTitle(state, peer, m);
+            if (betterChatTitle(title, found->title)) {
+                found->title = title;
+            }
             found->last = messageText(m);
             found->time = m.rxTime;
             if (messageIsUnreadIncoming(m)) found->unread = true;
@@ -2944,9 +3500,17 @@ std::vector<ChatEntry> chatEntries(const AppState &state) {
     }
 
     std::sort(entries.begin(), entries.end(), [](const ChatEntry &a, const ChatEntry &b) {
+        if (a.unread != b.unread) return a.unread && !b.unread;
         return a.time > b.time;
     });
     return entries;
+}
+
+int newestUnreadChatIndex(const std::vector<ChatEntry> &entries) {
+    for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
+        if (entries[static_cast<size_t>(i)].unread) return i;
+    }
+    return -1;
 }
 
 void markCurrentChatSeen(AppState &state) {
@@ -2995,22 +3559,25 @@ void drawChannelLockIcon(int x, int y, uint16_t c) {
 
 void drawChatsPanel(const AppState &state, int x, int y, int w, int h) {
     const std::vector<ChatEntry> entries = chatEntries(state);
-    const int selected = entries.empty() ? 0 : std::max(0, std::min(state.selectedChatIndex, static_cast<int>(entries.size()) - 1));
+    const int unreadIndex = newestUnreadChatIndex(entries);
+    const int selected = entries.empty() ? 0 :
+        (unreadIndex >= 0 ? unreadIndex : std::max(0, std::min(state.selectedChatIndex, static_cast<int>(entries.size()) - 1)));
     auto findNode = [&](uint32_t id) -> const NodeSummary * {
         for (const auto &node : state.knownNodes) {
             if (node.id == id || node.nodeId == nodeId(id)) return &node;
         }
         return nullptr;
     };
-    drawSectionTitle("ACTIVE CHATS", x + 16, y + 14, w - 32);
+    drawSectionTitle("DIRECT MESSAGES", x + 16, y + 14, w - 32);
     fillRect(x + 14, y + 30, w - 28, 28, rgb565(67, 123, 119), 255);
     drawBitmapIcon(icons::Chat, x + 22, y + 35, 18, 18, rgb565(235, 244, 244));
-    drawTinyTextFit(std::to_string(static_cast<int>(entries.size())) + " ACTIVE CHATS",
+    drawTinyTextFit(std::to_string(static_cast<int>(entries.size())) + " DIRECT CHATS",
                     x + 48, y + 40, w - 70, 1, rgb565(245, 248, 248));
 
     if (entries.empty()) {
         drawUserIconGlyph(0x1f4e5, x + w / 2 - 18, y + h / 2 - 24, 36, 36, rgb565(143, 177, 188));
-        drawTinyTextFit("NO CHATS YET", x + 24, y + h / 2 + 18, w - 48, 1, rgb565(180, 205, 212));
+        drawTinyTextFit("NO DIRECT MESSAGES YET", x + 24, y + h / 2 + 18, w - 48, 1, rgb565(180, 205, 212));
+        drawTinyTextFit("GROUP CHATS LIVE UNDER CHANNELS", x + 24, y + h / 2 + 38, w - 48, 1, rgb565(180, 205, 212));
     } else {
         const int rowH = 74;
         const int gap = 8;
@@ -3028,32 +3595,22 @@ void drawChatsPanel(const AppState &state, int x, int y, int w, int h) {
             const uint16_t edge = e.unread ? rgb565(238, 143, 41) : (active ? rgb565(77, 232, 141) : rgb565(145, 152, 152));
             fillRect(x + 18, rowY, w - 36, rowH, active ? rgb565(48, 70, 72) : rgb565(54, 54, 54), 245);
             strokeRect(x + 18, rowY, w - 36, rowH, edge);
-            if (e.channel) {
-                drawBitmapIcon(icons::Channels, x + 32, rowY + 17, 40, 40, e.unread ? rgb565(238, 143, 41) : rgb565(77, 232, 141));
+            NodeSummary pseudo;
+            if (const NodeSummary *known = findNode(e.node)) {
+                pseudo = *known;
             } else {
-                NodeSummary pseudo;
-                if (const NodeSummary *known = findNode(e.node)) {
-                    pseudo = *known;
-                } else {
-                    pseudo.id = e.node;
-                    pseudo.nodeId = e.nodeId;
-                    pseudo.name = e.title;
-                }
-                const int badge = 52;
-                drawNodeAvatar(pseudo, x + 28, rowY + (rowH - badge) / 2,
-                               badge, badge, !active && !e.unread);
+                pseudo.id = e.node;
+                pseudo.nodeId = e.nodeId;
+                pseudo.name = e.title;
             }
+            const int badge = 52;
+            drawNodeAvatar(pseudo, x + 28, rowY + (rowH - badge) / 2,
+                           badge, badge, !active && !e.unread);
             const int textX = x + 94;
             drawTinyTextFit((e.unread ? "* " : "") + e.title, textX, rowY + 12, w - (textX - x) - 84, 1, rgb565(245, 248, 248));
             drawTinyTextFit(e.last.empty() ? e.subtitle : e.last, textX, rowY + 36, w - (textX - x) - 84, 1, rgb565(180, 205, 212));
             drawTinyTextFit(e.time ? timeText(e.time) : "", x + w - 72, rowY + 24, 50, 1, rgb565(180, 205, 212));
             rowY += rowH + gap;
-        }
-        if (first > 0) {
-            drawTinyTextFit("MORE ^", x + w - 76, y + 61, 56, 1, rgb565(238, 191, 75));
-        }
-        if (first + visibleRows < static_cast<int>(entries.size())) {
-            drawTinyTextFit("MORE v", x + w - 76, y + h - 20, 56, 1, rgb565(238, 191, 75));
         }
     }
     fillRect(x + 14, y + h - 27, w - 28, 20, rgb565(12, 31, 41), 235);
@@ -3064,7 +3621,8 @@ void drawChannelsPanel(const AppState &state, int x, int y, int w, int h) {
     drawSectionTitle("GROUP CHANNELS", x + 16, y + 14, w - 32);
     fillRect(x + 14, y + 30, w - 28, 28, rgb565(67, 123, 119), 255);
     drawBitmapIcon(icons::Channels, x + 22, y + 35, 18, 18, rgb565(235, 244, 244));
-    drawTinyTextFit(std::to_string(static_cast<int>(state.channels.size())) + " CONFIGURED CHANNELS",
+    const int configuredCount = std::max(1, static_cast<int>(state.channels.size()));
+    drawTinyTextFit(std::to_string(configuredCount) + " CONFIGURED CHANNELS",
                     x + 48, y + 40, w - 70, 1, rgb565(245, 248, 248));
 
     const int first = std::max(0, state.selectedChannelIndex - 2);
@@ -3075,7 +3633,8 @@ void drawChannelsPanel(const AppState &state, int x, int y, int w, int h) {
         if (index >= 8 || rowY + rowH > y + h - 34) break;
         bool configured = false;
         const ChannelSummary ch = channelSlot(state, index, &configured);
-        const bool enabled = configured && ch.role != 0;
+        const bool fallbackPrimary = index == 0 && !state.channelName.empty();
+        const bool enabled = ch.role != 0 || fallbackPrimary;
         const bool active = index == state.selectedChannelIndex;
         const uint16_t bg = active ? rgb565(52, 73, 73) : rgb565(54, 54, 54);
         const uint16_t edge = active ? rgb565(77, 232, 141) : rgb565(145, 152, 152);
@@ -3084,17 +3643,19 @@ void drawChannelsPanel(const AppState &state, int x, int y, int w, int h) {
 
         const int iconX = x + 30;
         const int iconY = rowY + 4;
-        const uint16_t iconColor = !enabled || !ch.hasPsk ? rgb565(224, 58, 58)
+        const bool hasKey = ch.hasPsk || fallbackPrimary;
+        const uint16_t iconColor = !enabled ? rgb565(224, 58, 58)
+            : !hasKey ? rgb565(224, 58, 58)
             : (ch.pskBytes > 1 ? rgb565(77, 232, 141) : rgb565(238, 214, 69));
-        if (enabled && ch.hasPsk && ch.pskBytes <= 1) {
+        if (enabled && hasKey && ch.pskBytes <= 1) {
             drawChannelKeyIcon(iconX, iconY, iconColor);
         } else {
             drawChannelLockIcon(iconX, iconY, iconColor);
         }
 
         const std::string name = enabled ? channelDisplayName(state, index) : std::to_string(index);
-        drawTinyTextFit((ch.role == 1 ? "*" : "") + name, x + 64, rowY + 7, w - 150, 1, rgb565(245, 248, 248));
-        std::string detail = enabled ? (ch.hasPsk ? "encrypted" : "open") : "empty";
+        drawTinyTextFit(((ch.role == 1 || fallbackPrimary) ? "*" : "") + name, x + 64, rowY + 7, w - 150, 1, rgb565(245, 248, 248));
+        std::string detail = enabled ? (hasKey ? "encrypted" : "open") : "empty";
         if (ch.muted) detail += " muted";
         drawTinyTextFit(detail, x + 64, rowY + 21, w - 150, 1, enabled ? rgb565(180, 205, 212) : rgb565(145, 152, 152));
         drawTinyTextFit(enabled ? "A CHAT" : "disabled", x + w - 82, rowY + 14, 64, 1,
@@ -3164,9 +3725,11 @@ void drawMapPanel(const AppState &state, int x, int y, int w, int h) {
         const bool active = index == selected && state.dashboardFocused;
         fillRect(x + 22, rowY, listW - 16, 27, active ? rgb565(16, 68, 93) : rgb565(32, 42, 46), 235);
         strokeRect(x + 22, rowY, listW - 16, 27, active ? rgb565(77, 232, 141) : rgb565(69, 81, 84));
-        drawTinyTextFit(n.name.empty() ? n.nodeId : n.name, x + 30, rowY + 6, listW - 32, 1, rgb565(245, 248, 248));
+        drawNodeAvatar(n, x + 27, rowY + 4, 19, 19, !active);
+        const std::string mapListName = nodeBestName(n).empty() ? nodeBadgeLabel(n) : nodeBestName(n);
+        drawTinyTextFit(mapListName, x + 51, rowY + 5, listW - 55, 1, rgb565(245, 248, 248));
         drawTinyTextFit(std::string(n.hasPosition ? "GPS " : "NO GPS ") + nodeConnectionText(n),
-                        x + 30, rowY + 18, listW - 32, 1, rgb565(180, 205, 212));
+                        x + 51, rowY + 17, listW - 55, 1, rgb565(180, 205, 212));
         rowY += 31;
     }
 
@@ -3256,13 +3819,14 @@ void drawMapPanel(const AppState &state, int x, int y, int w, int h) {
             drawUserIconGlyphs(icons, nx, ny, size, size, rgb565(248, 250, 250));
         }
         if (active) strokeRect(nx - 5, ny - 5, size + 10, size + 10, rgb565(77, 232, 141));
-        drawTinyTextFit(n.shortName.empty() ? nodeBadgeLabel(n) : n.shortName,
-                        nx - 8, ny + size + 5, 54, 1, active ? rgb565(245, 248, 248) : rgb565(180, 205, 212));
+        const std::string label = nodeBestName(n).empty() ? nodeBadgeLabel(n) : nodeBestName(n);
+        drawTinyTextFit(label, nx - 8, ny + size + 5, 64, 1, active ? rgb565(245, 248, 248) : rgb565(180, 205, 212));
     }
     const NodeSummary &sel = state.knownNodes[static_cast<size_t>(selected)];
     fillRect(mapX + 10, mapY + mapH - 40, mapW - 20, 28, rgb565(10, 30, 42), 235);
     strokeRect(mapX + 10, mapY + mapH - 40, mapW - 20, 28, rgb565(35, 99, 118));
-    std::string selectedLine = (sel.name.empty() ? sel.nodeId : sel.name) + "  " + nodeConnectionText(sel);
+    const std::string selectedName = nodeBestName(sel).empty() ? nodeBadgeLabel(sel) : nodeBestName(sel);
+    std::string selectedLine = selectedName + "  " + nodeConnectionText(sel);
     if (sel.hasPosition) {
         char pos[96];
         std::snprintf(pos, sizeof(pos), "  %.5f %.5f %ldM",
@@ -3274,7 +3838,7 @@ void drawMapPanel(const AppState &state, int x, int y, int w, int h) {
     }
     drawTinyTextFit(selectedLine,
                     mapX + 20, mapY + mapH - 31, mapW - 40, 1, rgb565(245, 248, 248));
-    drawTinyTextFit(hasGeo ? "A CHAT  UP/DOWN SELECT NODE  MAP DATA READY" : "A CHAT  UP/DOWN SELECT NODE  WAITING GPS",
+    drawTinyTextFit("UP/DOWN SELECT NODE  A CHAT  SCROLL BAR SHOWS MORE",
                     x + 24, y + h - 20, w - 48, 1, rgb565(77, 232, 141));
 }
 
@@ -3289,6 +3853,7 @@ void drawSettingsPanel(const AppState &state, int x, int y, int w, int h) {
         {"LOG", "PACKET STREAM", "A opens live packet log"},
         {"DEBUG", "DECODED PACKET CARDS", "A opens packet detail"},
         {"STATUS", "USB NETWORK COUNTERS", "A opens device status"},
+        {"ADMIN", "OPEN", "Config, sync, and cache actions"},
         {"PLACEMENT", "OPEN", "Move and resize GUI boxes"},
         {"SCREENSAVER", "OPEN", "Mode, speed, and test screen"},
         {"FONT", "OPEN", "Style and size testing"},
@@ -3296,6 +3861,8 @@ void drawSettingsPanel(const AppState &state, int x, int y, int w, int h) {
         {"GUI OPTIONS", "OPEN", "Menu buttons and UI toggles"},
         {"MIDI / FILES", state.midiFiles.empty() ? "NO MIDI" : (std::to_string(static_cast<int>(state.midiFiles.size())) + " MIDI"),
          "A opens player and transfer folder"},
+        {"USB", state.usbDevices.empty() ? "SCAN / CONFIG" : (std::to_string(static_cast<int>(state.usbDevices.size())) + " DEVICE(S)"),
+         "A opens USB setup tools"},
         {"CLEAR MSGS", state.clearMessagesArmed ? "PRESS A AGAIN" : (std::to_string(static_cast<int>(state.messages.size())) + " SAVED"),
          "Clears messages.dat and current chats"},
         {"WII IP", state.networkReady ? state.wiiIp : "OFF", "A starts Wii IP/UDP"},
@@ -3319,6 +3886,142 @@ void drawSettingsPanel(const AppState &state, int x, int y, int w, int h) {
     const std::string footer = "UP/DOWN SETTING  A OPEN  " +
         std::to_string(first + 1) + "-" + std::to_string(last) + "/" + std::to_string(count);
     drawTinyTextFit(footer, x + 24, y + h - 20, w - 48, 1, rgb565(77, 232, 141));
+}
+
+void drawUsbToolsPanel(const AppState &state, int x, int y, int w, int h) {
+    drawSectionTitle("USB", x + 16, y + 14, w - 32);
+    drawTinyTextFit(state.usbStatus + "  " + state.usbDetail,
+                    x + 24, y + 38, w - 48, 1, rgb565(180, 205, 212));
+
+    struct Row {
+        const char *label;
+        const char *value;
+        const char *help;
+    };
+    const Row rows[] = {
+        {"SCAN", "REFRESH", "List connected USB devices"},
+        {"OPEN", "TRY SERIAL", "Open first supported or forced CDC device"},
+        {"FORCE ESP32", "303A:*", "Add Espressif ESP32-S3 CDC override"},
+        {"TRY ANY BULK", "DIAG", "Try any device with bulk IN/OUT as CDC"},
+        {"RESET CONFIG", "DEFAULT", "Restore USB.config examples"},
+        {"CDC", "REASSERT", "Send CDC line coding and DTR again"},
+        {"CONFIG WAKE", "SEND", "Send Meshtastic client config request"},
+        {"CP210X", "ADD 115200", "Append CP210x USB.config control recipe"},
+        {"USB CONTROL", "APPLY", "Run configured vendor control transfers"},
+    };
+
+    const int leftX = x + 18;
+    const int topY = y + 62;
+    const int listW = std::max(170, w / 2 - 26);
+    const int detailX = leftX + listW + 12;
+    const int detailW = w - (detailX - x) - 18;
+    int cy = topY;
+    for (int i = 0; i < UsbToolRowCount; ++i) {
+        const bool active = state.dashboardFocused && i == state.selectedUsbToolIndex;
+        fillRect(leftX, cy, listW, 22, active ? rgb565(52, 73, 73) : rgb565(54, 58, 59), 235);
+        strokeRect(leftX, cy, listW, 22, active ? rgb565(77, 232, 141) : rgb565(84, 91, 92));
+        drawTinyTextFit(rows[i].label, leftX + 10, cy + 5, listW - 80, 1, rgb565(245, 248, 248));
+        drawTinyTextFit(rows[i].value, leftX + listW - 70, cy + 5, 62, 1,
+                        i >= 2 ? rgb565(238, 191, 75) : rgb565(77, 232, 141));
+        cy += UsbToolRowH;
+    }
+
+    fillRect(detailX, topY, detailW, h - 104, rgb565(18, 39, 47), 225);
+    strokeRect(detailX, topY, detailW, h - 104, rgb565(35, 99, 118));
+    const int selected = std::max(0, std::min(state.selectedUsbToolIndex, UsbToolRowCount - 1));
+    drawTinyTextFit(rows[selected].help, detailX + 10, topY + 10, detailW - 20, 1, rgb565(77, 232, 141));
+    drawTinyTextFit("USB.config lives on SD:/apps/wii-mesh",
+                    detailX + 10, topY + 30, detailW - 20, 1, rgb565(180, 205, 212));
+    drawTinyTextFit("Devices: " + std::to_string(static_cast<int>(state.usbDevices.size())),
+                    detailX + 10, topY + 54, detailW - 20, 1, rgb565(245, 248, 248));
+    int dy = topY + 76;
+    if (state.usbDevices.empty()) {
+        drawTinyTextFit("No devices from last scan.", detailX + 10, dy, detailW - 20, 1, rgb565(180, 205, 212));
+    } else {
+        for (size_t i = 0; i < state.usbDevices.size() && dy + 38 < y + h - 32; ++i) {
+            const UsbDeviceInfo &d = state.usbDevices[i];
+            drawTinyTextFit(hex16(d.vendorId) + ":" + hex16(d.productId) + " " + d.driverHint,
+                            detailX + 10, dy, detailW - 20, 1, rgb565(245, 248, 248));
+            dy += 18;
+            if (!d.interfaces.empty()) {
+                const InterfaceInfo &iface = d.interfaces.front();
+                drawTinyTextFit("IF " + std::to_string(iface.number) + " C " + hex16(iface.klass) +
+                                " EP " + (iface.endpoints.empty() ? "none" : hex16(iface.endpoints.front().address)),
+                                detailX + 18, dy, detailW - 28, 1, rgb565(180, 205, 212));
+                dy += 20;
+            }
+        }
+    }
+
+    fillRect(x + 14, y + h - 27, w - 28, 20, rgb565(12, 31, 41), 235);
+    drawTinyTextFit("UP/DOWN USB TOOL  A RUN  B SETTINGS",
+                    x + 24, y + h - 20, w - 48, 1, rgb565(77, 232, 141));
+}
+
+void drawAdminToolsPanel(const AppState &state, int x, int y, int w, int h) {
+    drawSectionTitle("ADMIN", x + 16, y + 14, w - 32);
+    drawTinyTextFit(state.usbStatus + "  " + state.usbDetail,
+                    x + 24, y + 38, w - 48, 1, rgb565(180, 205, 212));
+
+    struct Row {
+        const char *label;
+        const char *value;
+        const char *help;
+    };
+    const Row rows[] = {
+        {"CONFIG", "WAKE", "Retry Meshtastic client config/session"},
+        {"HEART", "BEAT", "Send PhoneAPI heartbeat to the mesh device"},
+        {"RX", "SNAPSHOT", "Copy counters into the stream log"},
+        {"TEXT", "SNAPSHOT", "Copy recent messages into the stream log"},
+        {"STREAM", "MARK", "Add an admin marker to the packet stream"},
+        {"DEBUG", "MARK", "Add an admin marker to status/debug"},
+        {"NODES", "CLEAR", "Clear node cache and request fresh NodeInfo"},
+        {"RESYNC", "FULL", "Reset protocol parser and request config"},
+    };
+
+    const int leftX = x + 18;
+    const int topY = y + 62;
+    const int listW = std::max(170, w / 2 - 26);
+    const int detailX = leftX + listW + 12;
+    const int detailW = w - (detailX - x) - 18;
+    int cy = topY;
+    for (int i = 0; i < AdminToolRowCount; ++i) {
+        const bool active = state.dashboardFocused && i == state.selectedAdminToolIndex;
+        fillRect(leftX, cy, listW, 22, active ? rgb565(52, 73, 73) : rgb565(54, 58, 59), 235);
+        strokeRect(leftX, cy, listW, 22, active ? rgb565(77, 232, 141) : rgb565(84, 91, 92));
+        drawTinyTextFit(rows[i].label, leftX + 10, cy + 5, listW - 80, 1, rgb565(245, 248, 248));
+        drawTinyTextFit(rows[i].value, leftX + listW - 70, cy + 5, 62, 1,
+                        i >= 6 ? rgb565(238, 191, 75) : rgb565(77, 232, 141));
+        cy += AdminToolRowH;
+    }
+
+    fillRect(detailX, topY, detailW, h - 104, rgb565(18, 39, 47), 225);
+    strokeRect(detailX, topY, detailW, h - 104, rgb565(35, 99, 118));
+    const int selected = std::max(0, std::min(state.selectedAdminToolIndex, AdminToolRowCount - 1));
+    drawTinyTextFit(rows[selected].help, detailX + 10, topY + 10, detailW - 20, 1, rgb565(77, 232, 141));
+    drawTinyTextFit("Node: " + state.nodeName + "  Me: " + state.myNodeId,
+                    detailX + 10, topY + 32, detailW - 20, 1, rgb565(245, 248, 248));
+    drawTinyTextFit("Channel: " + state.channelName + "  Protocol " +
+                    std::string(state.protocolReady ? "ready" : "syncing"),
+                    detailX + 10, topY + 54, detailW - 20, 1, rgb565(180, 205, 212));
+    drawTinyTextFit("RX " + std::to_string(state.rxBytes) + " bytes/" +
+                    std::to_string(state.rxFrames) + " frames bad " +
+                    std::to_string(state.rxBadFrames),
+                    detailX + 10, topY + 76, detailW - 20, 1, rgb565(245, 248, 248));
+    drawTinyTextFit("Messages " + std::to_string(static_cast<int>(state.messages.size())) +
+                    "  Nodes " + std::to_string(static_cast<int>(state.knownNodes.size())) +
+                    "  TX " + std::to_string(state.txBytes),
+                    detailX + 10, topY + 98, detailW - 20, 1, rgb565(245, 248, 248));
+    drawTinyTextFit("Wii IP " + state.wiiIp + "  M Device IP " + state.meshDeviceIp,
+                    detailX + 10, topY + 120, detailW - 20, 1, rgb565(180, 205, 212));
+    if (!state.protocolEvents.empty()) {
+        drawTinyTextFit("Event: " + cleanText(state.protocolEvents.back()),
+                        detailX + 10, topY + 144, detailW - 20, 1, rgb565(238, 191, 75));
+    }
+
+    fillRect(x + 14, y + h - 27, w - 28, 20, rgb565(12, 31, 41), 235);
+    drawTinyTextFit("UP/DOWN ADMIN  A RUN  B SETTINGS",
+                    x + 24, y + h - 20, w - 48, 1, rgb565(77, 232, 141));
 }
 
 void drawMidiPlayerPanel(const AppState &state, int x, int y, int w, int h) {
@@ -3536,7 +4239,6 @@ void drawNodeOptionsPanel(const AppState &state, int x, int y, int w, int h) {
 
 void drawChatPanel(const AppState &state, int x, int y, int w, int h) {
     const int keyboardH = state.composingMessage ? chatKeyboardHeight(h) : 0;
-    const int chatBottom = y + h - keyboardH - 8;
     const bool channelChat = state.chatChannelIndex >= 0;
     drawSectionTitle(channelChat ? "GROUP CHAT" : "DIRECT CHAT", x + 16, y + 14, w - 32);
     fillRect(x + 14, y + 28, w - 28, 27, rgb565(67, 123, 119), 245);
@@ -3589,7 +4291,7 @@ void drawChatPanel(const AppState &state, int x, int y, int w, int h) {
         const int bx = mine ? x + w - bw - 24 : x + 24;
         fillRect(bx, cy, bw, bubbleH, mine ? rgb565(24, 80, 104) : rgb565(30, 48, 57), 245);
         strokeRect(bx, cy, bw, bubbleH, mine ? rgb565(51, 215, 238) : rgb565(88, 101, 105));
-        drawTinyTextFit(timeText(m.rxTime) + " " + senderText(m), bx + 10, cy + 8, bw - 20, 1, rgb565(180, 205, 212));
+        drawTinyTextFit(timeText(m.rxTime) + " " + senderText(state, m), bx + 10, cy + 8, bw - 20, 1, rgb565(180, 205, 212));
         drawWrappedTinyText(messageText(m), bx + 10, cy + (state.composingMessage ? 22 : 25),
                             bw - ((mine || m.outgoing) ? 42 : 20),
                             1, state.composingMessage ? 1 : 2, 13, rgb565(245, 248, 248));
@@ -3599,18 +4301,10 @@ void drawChatPanel(const AppState &state, int x, int y, int w, int h) {
         }
         cy += bubbleH + 8;
     }
-    if (!visibleMessages.empty()) {
-        if (start > 0) {
-            drawTinyTextFit("OLDER ^", x + w - 82, y + 72, 62, 1, rgb565(238, 191, 75));
-        }
-        if (end < totalMessages) {
-            drawTinyTextFit("NEWER v", x + w - 82, chatBottom - 16, 62, 1, rgb565(238, 191, 75));
-        }
-    }
     if (visibleMessages.empty()) {
         drawTinyTextFit(channelChat ? "NO MESSAGES IN THIS CHANNEL YET" : "READY TO MESSAGE THIS NODE",
                         x + 24, y + 76, w - 48, 1, rgb565(235, 244, 244));
-        drawTinyTextFit(channelChat ? "CHANNEL SEND COMES AFTER RECEIVE UI IS SOLID" : "PRESS A TO OPEN THE KEYBOARD",
+        drawTinyTextFit(channelChat ? "CHANNEL SEND COMES AFTER RECEIVE UI IS SOLID" : "A OPENS KEYBOARD, 2 SENDS SELECTED MIDI",
                         x + 24, y + 96, w - 48, 1, rgb565(170, 197, 204));
     }
     if (state.composingMessage) {
@@ -3641,12 +4335,6 @@ void drawChatPanel(const AppState &state, int x, int y, int w, int h) {
         firstRow = std::min(firstRow, std::max(0, totalRows - visibleRows));
         int index = firstRow * cols;
         const int lastIndex = std::min(static_cast<int>(keys.size()), (firstRow + visibleRows) * cols);
-        if (firstRow > 0) {
-            drawTinyTextFit("MORE WORDS ^", x + w - 116, ky + 36, 94, 1, rgb565(238, 191, 75));
-        }
-        if (firstRow + visibleRows < totalRows) {
-            drawTinyTextFit("MORE KEYS v", x + w - 108, y + h - 20, 86, 1, rgb565(238, 191, 75));
-        }
         int keyY = ky + 42;
         while (index < lastIndex && keyY + keyH < y + h - 8) {
             for (int col = 0; col < cols && index < static_cast<int>(keys.size()); ++col, ++index) {
@@ -3669,7 +4357,13 @@ void drawChatPanel(const AppState &state, int x, int y, int w, int h) {
                            selected ? rgb565(77, 232, 141) : (send ? rgb565(77, 232, 141) : rgb565(85, 101, 107)));
                 uint16_t ink = selected ? rgb565(255, 255, 255) : rgb565(215, 226, 229);
                 if (back) ink = rgb565(238, 191, 75);
-                if (key.type == KeyboardKeyType::UnicodeBadge && key.emojiCodepoint != 0) {
+                if (key.type == KeyboardKeyType::UnicodeBadge && !key.emojiCodepoints.empty()) {
+                    if (const emoji::Icon *icon = emojiIconSequence(key.emojiCodepoints)) {
+                        drawEmojiIcon(*icon, keyX + 5, keyY + 2, drawW - 10, keyH - 4);
+                    } else {
+                        drawUserIconGlyphs(key.emojiCodepoints, keyX + 5, keyY + 2, drawW - 10, keyH - 4, ink);
+                    }
+                } else if (key.type == KeyboardKeyType::UnicodeBadge && key.emojiCodepoint != 0) {
                     drawUserIconGlyphs(std::vector<uint32_t>{key.emojiCodepoint}, keyX + 5, keyY + 2, drawW - 10, keyH - 4, ink);
                 } else {
                     drawTinyTextFit(key.label, keyX + 6, keyY + 4, drawW - 12, 1, ink);
@@ -3697,10 +4391,13 @@ void drawGraphicalContent(const AppState &state, int x, int y, int w, int h) {
     case ScreenFontSettings: drawFontSettingsPanel(state, x, y, w, h); break;
     case ScreenFontDebug: drawFontDebugPanel(state, x, y, w, h); break;
     case ScreenMidiPlayer: drawMidiPlayerPanel(state, x, y, w, h); break;
+    case ScreenUsbTools: drawUsbToolsPanel(state, x, y, w, h); break;
+    case ScreenAdminTools: drawAdminToolsPanel(state, x, y, w, h); break;
     case ScreenGuiOptions: drawGuiOptionsPanel(state, x, y, w, h); break;
     case ScreenChatDetail: drawChatPanel(state, x, y, w, h); break;
     default: drawHomePanel(state, x, y, w, h); break;
     }
+    drawPullBar(x, y, w, h, pullBarState(state, h));
 }
 
 void drawGraphicalFooter(const AppState &state, int x, int y, int w, int h) {
@@ -3708,7 +4405,7 @@ void drawGraphicalFooter(const AppState &state, int x, int y, int w, int h) {
     const std::string help = state.composingMessage
         ? "KEYBOARD  D-PAD MOVE  A KEY/SEND  B CANCEL"
         : state.uiTab == ScreenChatDetail && state.chatChannelIndex < 0
-        ? "FOCUSED  UP/DOWN SCROLL  A TYPE DIRECT MESSAGE  B BACK"
+        ? "FOCUSED  UP/DOWN SCROLL  A TYPE  2 SEND MIDI  B BACK"
         : state.uiTab == ScreenChatDetail
         ? "FOCUSED  UP/DOWN SCROLL  B BACK TO CHATS"
         : state.dashboardFocused
@@ -3725,6 +4422,8 @@ bool shouldUseGraphicsOnly(const AppState &state) {
            state.uiTab == ScreenChatDetail || state.uiTab == ScreenNodeTools ||
            state.uiTab == ScreenScreensaverSettings || state.uiTab == ScreenFontSettings ||
            state.uiTab == ScreenFontDebug || state.uiTab == ScreenMidiPlayer ||
+           state.uiTab == ScreenUsbTools ||
+           state.uiTab == ScreenAdminTools ||
            state.uiTab == ScreenGuiOptions;
 }
 #endif
@@ -3830,7 +4529,7 @@ void drawHeader(const AppState &state) {
     printAtW(row, std::max(col, col + header.textWidth - 18), 18,
              state.networkReady ? "IP/UDP ON" : "IP/UDP OFF");
     printAtW(row + 1, col, header.textWidth, "USB: " + state.usbStatus);
-    printAtW(row + 2, col, header.textWidth, "Me: " + state.myNodeId + "  " + state.nodeName);
+    printAtW(row + 2, col, header.textWidth, "Me: " + selfDisplayName(state));
     printAtW(row + 3, col, header.textWidth, "Ch: " + state.channelName + "  Nodes " + std::to_string(state.nodeCount) +
                   "  Text " + std::to_string(static_cast<int>(state.messages.size())));
     printAtW(row + 4, col, header.textWidth, "RX " + std::to_string(state.rxBytes) + " bytes/" +
@@ -3930,7 +4629,7 @@ void drawHome(const AppState &state) {
     } else {
         const Message &m = state.messages.back();
         rows.push_back("  " + timeText(m.rxTime) + " " + std::string(m.direct ? "DM " : "CH ") +
-                       senderText(m) + " " + m.channelName);
+                       senderText(state, m) + " " + m.channelName);
         rows.push_back("  " + messageText(m));
     }
 
@@ -3961,7 +4660,7 @@ void drawMessages(AppState &state) {
         const bool selected = index == state.selectedMessageIndex;
         const std::string type = m.direct ? "DM" : "CH";
         printContent(row++, 3, std::string(selected ? ">" : " ") + timeText(m.rxTime) + " " + type +
-                      " " + senderText(m) + " " + m.channelName);
+                      " " + senderText(state, m) + " " + m.channelName);
         printContent(row++, 5, messageText(m));
     }
     printAt(19, 3, "A: open selected chat/reply");
@@ -3975,7 +4674,7 @@ void drawNodes(AppState &state) {
         : std::to_string(state.nodeCount) + " nodes known";
     printContent(ContentRow, 3, "NODE LIST   " + online);
     if (state.knownNodes.empty()) {
-        printContent(ContentRow + 2, 5, "Waiting for node info from the RAK.");
+        printContent(ContentRow + 2, 5, "Waiting for node info from the radio.");
         printContent(ContentRow + 4, 5, "2: Node Options filters/highlights");
         return;
     }
@@ -4074,6 +4773,7 @@ void drawSettings(const AppState &state) {
     printContent(row++, 3, "> Log       packet stream");
     printContent(row++, 3, "  Debug     decoded packet cards");
     printContent(row++, 3, "  Status    USB, network, packet counters");
+    printContent(row++, 3, "  Admin     config, sync, cache actions");
     printContent(row++, 3, "  MIDI      player and MeshFile transfers");
     row++;
     printContent(row++, 3, "A: open Log. Use Right from LOG for DEBUG/STATUS.");
@@ -4107,7 +4807,7 @@ void drawChat(const AppState &state) {
     int shown = 0;
     for (int i = start; i < static_cast<int>(matchingMessages.size()) && row <= 17; ++i) {
         const Message &m = *matchingMessages[static_cast<size_t>(i)];
-        printContent(row++, 3, timeText(m.rxTime) + " " + senderText(m));
+        printContent(row++, 3, timeText(m.rxTime) + " " + senderText(state, m));
         printWrappedContent(row, messageText(m), 5);
         if (++shown >= 2) break;
     }
@@ -4242,19 +4942,18 @@ void buildBellTone() {
 }
 
 void maybePlayBell(const AppState &state) {
-    static uint32_t lastIncoming = 0;
+    static uint32_t lastBellRequest = 0;
     static bool armed = false;
-    const uint32_t incoming = incomingMessageCount(state);
     if (!armed) {
-        lastIncoming = incoming;
+        lastBellRequest = state.bellRequestSeq;
         armed = true;
         return;
     }
-    if (incoming > lastIncoming) {
+    if (state.bellRequestSeq != lastBellRequest) {
         buildBellTone();
         ASND_SetVoice(0, VOICE_MONO_16BIT, 32000, 0, gBellPcm, sizeof(gBellPcm), 220, 220, nullptr);
     }
-    lastIncoming = incoming;
+    lastBellRequest = state.bellRequestSeq;
 }
 #endif
 
@@ -4465,6 +5164,12 @@ void Ui::updateInput(AppState &state) {
         } else if (state.uiTab == ScreenMidiPlayer) {
             state.uiTab = ScreenHome;
             state.dashboardFocused = false;
+        } else if (state.uiTab == ScreenUsbTools) {
+            state.uiTab = ScreenSettings;
+            state.dashboardFocused = true;
+        } else if (state.uiTab == ScreenAdminTools) {
+            state.uiTab = ScreenSettings;
+            state.dashboardFocused = true;
         } else if (state.uiTab == ScreenGuiOptions) {
             state.uiTab = ScreenSettings;
             state.dashboardFocused = true;
@@ -4503,6 +5208,10 @@ void Ui::updateInput(AppState &state) {
             saveGuiConfig(state);
         } else if (state.uiTab == ScreenMidiPlayer && state.selectedMidiIndex > 0) {
             state.selectedMidiIndex--;
+        } else if (state.uiTab == ScreenUsbTools && state.selectedUsbToolIndex > 0) {
+            state.selectedUsbToolIndex--;
+        } else if (state.uiTab == ScreenAdminTools && state.selectedAdminToolIndex > 0) {
+            state.selectedAdminToolIndex--;
         } else if (state.uiTab == ScreenGuiOptions && state.selectedGuiOptionIndex > 0) {
             state.selectedGuiOptionIndex--;
         } else if ((state.uiTab == ScreenNodeOptions || state.uiTab == ScreenMap) && state.selectedNodeIndex > 0) {
@@ -4536,6 +5245,10 @@ void Ui::updateInput(AppState &state) {
         } else if (state.uiTab == ScreenMidiPlayer &&
                    state.selectedMidiIndex + 1 < static_cast<int>(state.midiFiles.size())) {
             state.selectedMidiIndex++;
+        } else if (state.uiTab == ScreenUsbTools && state.selectedUsbToolIndex + 1 < UsbToolRowCount) {
+            state.selectedUsbToolIndex++;
+        } else if (state.uiTab == ScreenAdminTools && state.selectedAdminToolIndex + 1 < AdminToolRowCount) {
+            state.selectedAdminToolIndex++;
         } else if (state.uiTab == ScreenGuiOptions && state.selectedGuiOptionIndex < 8) {
             state.selectedGuiOptionIndex++;
         } else if ((state.uiTab == ScreenNodeOptions || state.uiTab == ScreenMap) &&
@@ -4587,6 +5300,21 @@ void Ui::updateInput(AppState &state) {
         saveGuiConfig(state);
         return;
     }
+    if ((down & WPAD_BUTTON_2) && state.uiTab == ScreenChatDetail) {
+        if (state.chatChannelIndex < 0 && !state.chatPeerNodeId.empty()) {
+            const uint32_t peer = parseNodeIdText(state.chatPeerNodeId);
+            if (peer != 0) {
+                state.midiSendTo = peer;
+                state.midiCommand = 6;
+                state.usbDetail = "MIDI send requested";
+            } else {
+                state.usbDetail = "MIDI send needs direct node";
+            }
+        } else {
+            state.usbDetail = "MIDI send is direct-only";
+        }
+        return;
+    }
     if ((down & WPAD_BUTTON_2) && state.uiTab == ScreenNodeOptions) {
         state.uiTab = ScreenNodeTools;
         state.scrollOffset = 0;
@@ -4631,7 +5359,9 @@ void Ui::updateInput(AppState &state) {
         if (state.uiTab == ScreenChats) {
             const std::vector<ChatEntry> entries = chatEntries(state);
             if (!entries.empty()) {
-                const int index = std::max(0, std::min(state.selectedChatIndex, static_cast<int>(entries.size()) - 1));
+                const int unreadIndex = newestUnreadChatIndex(entries);
+                const int index = unreadIndex >= 0 ? unreadIndex :
+                    std::max(0, std::min(state.selectedChatIndex, static_cast<int>(entries.size()) - 1));
                 openChatEntry(state, entries[static_cast<size_t>(index)]);
             }
         } else if (state.uiTab == ScreenHome && !state.messages.empty()) {
@@ -4658,98 +5388,17 @@ void Ui::updateInput(AppState &state) {
         } else if (state.uiTab == ScreenChatDetail && state.chatChannelIndex < 0 && !state.chatPeerNodeId.empty()) {
             startCompose(state);
         } else if (state.uiTab == ScreenSettings) {
-            if (state.selectedSettingsIndex == 0) {
-                state.uiTab = ScreenLog;
-                state.dashboardFocused = true;
-            } else if (state.selectedSettingsIndex == 1) {
-                state.uiTab = ScreenDebug;
-                state.dashboardFocused = true;
-            } else if (state.selectedSettingsIndex == 2) {
-                state.uiTab = ScreenStatus;
-                state.dashboardFocused = true;
-            } else if (state.selectedSettingsIndex == 3) {
-                state.showCalibration = true;
-                state.showDiagnostics = false;
-                state.dashboardFocused = true;
-                state.usbDetail = "Placement editor";
-            } else if (state.selectedSettingsIndex == 4) {
-                state.uiTab = ScreenScreensaverSettings;
-                state.dashboardFocused = true;
-            } else if (state.selectedSettingsIndex == 5) {
-                state.uiTab = ScreenFontSettings;
-                state.dashboardFocused = true;
-            } else if (state.selectedSettingsIndex == 6) {
-                state.uiTab = ScreenFontDebug;
-                state.dashboardFocused = true;
-            } else if (state.selectedSettingsIndex == 7) {
-                state.uiTab = ScreenGuiOptions;
-                state.dashboardFocused = true;
-            } else if (state.selectedSettingsIndex == 8) {
-                state.uiTab = ScreenMidiPlayer;
-                state.dashboardFocused = true;
-                state.midiCommand = 3;
-            } else if (state.selectedSettingsIndex == 9) {
-                if (state.clearMessagesArmed) {
-                    state.messages.clear();
-                    state.messageRevision++;
-                    state.textMessageCount = 0;
-                    state.selectedMessageIndex = 0;
-                    state.selectedChatIndex = 0;
-                    state.scrollOffset = 0;
-                    state.clearMessagesArmed = false;
-                    state.usbStatus = "Messages cleared";
-                    state.usbDetail = "messages.dat will save empty";
-                } else {
-                    state.clearMessagesArmed = true;
-                    state.usbStatus = "Confirm clear messages";
-                    state.usbDetail = "Press A again on CLEAR MSGS";
-                }
-            } else if (state.selectedSettingsIndex == 10) {
-                state.networkRequested = true;
-            }
+            activateSettingsSelection(state);
         } else if (state.uiTab == ScreenScreensaverSettings) {
-            if (state.selectedScreensaverIndex == 0) {
-                state.screensaverMode = (state.screensaverMode + 1) % 3;
-            } else if (state.selectedScreensaverIndex == 1) {
-                state.screensaverSpeed = (state.screensaverSpeed + 1) % 6;
-            } else if (state.selectedScreensaverIndex == 2) {
-                gScreensaverIdleFrames = ScreensaverIdleFrames;
-                gScreensaverActive = true;
-                gScreensaverDismissBlockFrames = 30;
-                state.screensaverActive = true;
-                state.usbDetail = "Screensaver test";
-                noteScreensaver(state, "start test");
-            }
-            saveGuiConfig(state);
+            activateScreensaverSettingsSelection(state);
         } else if (state.uiTab == ScreenFontSettings) {
-            if (state.selectedFontIndex == 0) {
-                state.fontStyle = (state.fontStyle + 1) % FontStyleCount;
-                saveGuiConfig(state);
-            } else if (state.selectedFontIndex == 1) {
-                state.fontSize = (state.fontSize + 1) % (FontSizeMax + 1);
-                saveGuiConfig(state);
-            } else if (state.selectedFontIndex == 2) {
-                state.uiTab = ScreenFontDebug;
-                state.dashboardFocused = true;
-            }
+            activateFontSettingsSelection(state);
         } else if (state.uiTab == ScreenGuiOptions) {
-            if (state.selectedGuiOptionIndex >= 0 && state.selectedGuiOptionIndex < PrimaryTabCount) {
-                state.menuEnabled[state.selectedGuiOptionIndex] = !state.menuEnabled[state.selectedGuiOptionIndex];
-                bool any = false;
-                for (int i = 0; i < PrimaryTabCount; ++i) any = any || state.menuEnabled[i];
-                if (!any) state.menuEnabled[ScreenSettings] = true;
-                if (state.uiTab < PrimaryTabCount && !menuTabEnabled(state, state.uiTab)) {
-                    state.uiTab = firstEnabledPrimaryTab(state);
-                }
-            } else if (state.selectedGuiOptionIndex == 6) {
-                state.debugEnabled = !state.debugEnabled;
-            } else if (state.selectedGuiOptionIndex == 7) {
-                state.pointerEnabled = !state.pointerEnabled;
-            } else if (state.selectedGuiOptionIndex == 8) {
-                state.midiRepeat = !state.midiRepeat;
-            }
-            saveGuiConfig(state);
-            state.usbDetail = "GUI option saved";
+            activateGuiOptionSelection(state);
+        } else if (state.uiTab == ScreenUsbTools) {
+            activateUsbToolSelection(state);
+        } else if (state.uiTab == ScreenAdminTools) {
+            activateAdminToolSelection(state);
         } else if (state.uiTab == ScreenMidiPlayer) {
             state.midiCommand = 1;
             state.usbDetail = "MIDI play requested";
@@ -4779,6 +5428,57 @@ void drawMidiPlayerText(const AppState &state) {
         }
     }
     printContent(PageRows - 1, 3, "A play  1 stop  2 repeat  - delete  B home");
+}
+
+void drawUsbToolsText(const AppState &state) {
+    printContent(0, 3, "USB Tools");
+    printContent(1, 3, state.usbStatus);
+    printContent(2, 3, state.usbDetail);
+    const char *rows[] = {
+        "Scan USB devices",
+        "Open serial device",
+        "Add force_cdc=303a:*",
+        "Add try_any_bulk_cdc=1",
+        "Reset USB.config",
+        "CDC reassert",
+        "Send config wake",
+        "Add CP210x recipe",
+        "Apply USB controls",
+    };
+    for (int i = 0; i < UsbToolRowCount; ++i) {
+        printContent(4 + i, 3, std::string(i == state.selectedUsbToolIndex ? "> " : "  ") + rows[i]);
+    }
+    printContent(13, 3, "Devices: " + std::to_string(static_cast<int>(state.usbDevices.size())));
+    int row = 14;
+    for (const auto &d : state.usbDevices) {
+        if (row >= PageRows - 1) break;
+        printContent(row++, 3, hex16(d.vendorId) + ":" + hex16(d.productId) + " " + d.driverHint);
+    }
+    printContent(PageRows - 1, 3, "A run  B settings");
+}
+
+void drawAdminToolsText(const AppState &state) {
+    printContent(0, 3, "Admin");
+    printContent(1, 3, state.usbStatus);
+    printContent(2, 3, state.usbDetail);
+    const char *rows[] = {
+        "Config wake",
+        "Heartbeat",
+        "RX snapshot",
+        "Text snapshot",
+        "Stream marker",
+        "Debug marker",
+        "Clear node cache",
+        "Full resync",
+    };
+    for (int i = 0; i < AdminToolRowCount; ++i) {
+        printContent(4 + i, 3, std::string(i == state.selectedAdminToolIndex ? "> " : "  ") + rows[i]);
+    }
+    printContent(13, 3, "Node: " + state.nodeName + " " + state.myNodeId);
+    printContent(14, 3, "RX " + std::to_string(state.rxFrames) + " bad " +
+                          std::to_string(state.rxBadFrames) + " TX " +
+                          std::to_string(state.txBytes));
+    printContent(PageRows - 1, 3, "A run  B settings");
 }
 
 void Ui::draw(const AppState &state) {
@@ -4852,6 +5552,10 @@ void Ui::draw(const AppState &state) {
         drawSettings(state);
     } else if (state.uiTab == ScreenMidiPlayer) {
         drawMidiPlayerText(state);
+    } else if (state.uiTab == ScreenUsbTools) {
+        drawUsbToolsText(state);
+    } else if (state.uiTab == ScreenAdminTools) {
+        drawAdminToolsText(state);
     } else if (state.uiTab == ScreenChatDetail) {
         drawChat(state);
     } else if (state.uiTab == ScreenLog) {

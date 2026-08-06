@@ -4,16 +4,26 @@ setlocal
 set "SCRIPT_DIR=%~dp0"
 set "ROOT=%SCRIPT_DIR%.."
 if exist "%SCRIPT_DIR%..\work\WiiMesh\Makefile" set "ROOT=%SCRIPT_DIR%..\work\WiiMesh"
-set "OUT_ICONS=%SCRIPT_DIR%ui_icons"
+set "OUT_DIR=%ROOT%\..\..\outputs"
+set "OUT_ICONS=%SCRIPT_DIR%icons"
+if not exist "%OUT_ICONS%" set "OUT_ICONS=%ROOT%\..\..\outputs\icons"
+if not exist "%OUT_ICONS%" set "OUT_ICONS=%SCRIPT_DIR%..\..\outputs\icons"
+if not exist "%OUT_ICONS%" set "OUT_ICONS=%SCRIPT_DIR%ui_icons"
 if not exist "%OUT_ICONS%" set "OUT_ICONS=%ROOT%\..\..\outputs\ui_icons"
 if not exist "%OUT_ICONS%" set "OUT_ICONS=%SCRIPT_DIR%..\..\outputs\ui_icons"
-set "OUT_DIR=%ROOT%\..\..\outputs"
 
 if exist "%OUT_ICONS%" (
   echo Syncing editable icons from "%OUT_ICONS%"...
-  copy /Y "%OUT_ICONS%\*.png" "%ROOT%\assets\ui_icons\" >nul
+  if not exist "%ROOT%\assets\ui_icons" mkdir "%ROOT%\assets\ui_icons" >nul 2>nul
+  copy /Y "%OUT_ICONS%\home.png" "%ROOT%\assets\ui_icons\" >nul 2>nul
+  copy /Y "%OUT_ICONS%\node.png" "%ROOT%\assets\ui_icons\" >nul 2>nul
+  copy /Y "%OUT_ICONS%\channels.png" "%ROOT%\assets\ui_icons\" >nul 2>nul
+  copy /Y "%OUT_ICONS%\chat.png" "%ROOT%\assets\ui_icons\" >nul 2>nul
+  copy /Y "%OUT_ICONS%\map.png" "%ROOT%\assets\ui_icons\" >nul 2>nul
+  copy /Y "%OUT_ICONS%\settings.png" "%ROOT%\assets\ui_icons\" >nul 2>nul
+  copy /Y "%OUT_ICONS%\bell.png" "%ROOT%\assets\ui_icons\" >nul 2>nul
 ) else (
-  echo No outputs\ui_icons folder found. Building with project icons.
+  echo No outputs\icons or outputs\ui_icons folder found. Building with project icons.
 )
 
 pushd "%ROOT%"

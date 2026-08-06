@@ -2,6 +2,229 @@
 
 All notable WiiMesh test-build changes are tracked here so real-Wii testing does not depend on chat history.
 
+## 0.1.221 - 2026-08-05
+
+- Fixes locally sent Wii messages showing `December 31, 1969` by using a Wii-safe Unix timestamp helper instead of relying on unset C library time.
+- Applies the same clock helper to incoming message timestamps, debug cards, node last-heard values, MIDI transfer timestamps, and the Home screen clock so times stay consistent.
+- Keeps `0.1.220` Admin panel changes intact.
+
+## 0.1.220 - 2026-08-05
+
+- Adds a Settings > Admin panel with TV-safe menu actions for config wake, heartbeat, RX snapshot, text snapshot, stream marker, debug marker, node cache clear, and full protocol resync.
+- Wires the Admin panel into D-pad, pointer click, pull-bar, and console fallback navigation without changing saved `GUI.config` placement data.
+- Logs every Admin action to the live stream/debug log so real-Wii tests can confirm what command ran before checking receive behavior.
+
+## 0.1.219 - 2026-08-05
+
+- Fixes Heltec receive startup by keeping WiiMesh in `SYNCING` until a real Meshtastic `config_complete` packet arrives instead of marking the protocol online immediately after writing `want_config_id`.
+- Automatically retries the Meshtastic config request while syncing; live testing showed a manual `CFG` caused the next Chrome direct message to arrive and be stored as unread.
+- Keeps the new UDP diagnostics from `0.1.218` so direct-message receive tests can distinguish `ROUTING_APP` delivery/status packets from actual `TEXT_MESSAGE_APP` payloads.
+
+## 0.1.218 - 2026-08-05
+
+- Adds UDP `STREAM_GET`, `EVENTS_GET`, and `DEBUG_GET` so live receive debugging does not depend on FTP log pulls.
+- Dumps recent compact stream lines, protocol events, and parsed debug packet summaries to diagnose why Heltec-acknowledged PC messages are not becoming WiiMesh chat rows.
+- Keeps existing `RX_STATUS`, `TEXT_LOG`, and `CHAT_LIST` unchanged for before/after message comparisons.
+
+## 0.1.217 - 2026-08-05
+
+- Fixes direct-chat title downgrades where a good incoming sender name such as `pumpkinPulse` could be replaced by a later outgoing row that only knew the raw `!nodeid`.
+- Applies the same "only improve, never downgrade" title rule to both the Wii Chat screen and UDP `CHAT_LIST`.
+- Keeps the self-to-self `ADMIN_APP` packets from the UDP config bridge separate from actual direct-message diagnosis.
+
+## 0.1.216 - 2026-08-05
+
+- Adds UDP raw-control commands for Heltec testing without rebuilding: `USB_RAW_HEX`, `USB_ASCII`, `TO_RADIO_HEX`, `FROM_RADIO_HEX`, and `HEARTBEAT`.
+- Allows PC-side tools to send exact USB bytes or exact framed Meshtastic `ToRadio` protobuf payloads while WiiMesh is running.
+- Increases the UDP command buffer so larger config/protocol test payloads can be sent over the live command port.
+- Adds `tools/wiimesh_admin_udp.py` / `.bat`, which uses Meshtastic-python protobufs to generate AdminMessage requests such as `get-network`, `get-owner`, `get-metadata`, and `request-session` and send them through WiiMesh UDP.
+- Notes from Meshtastic-python: serial wake is thirty-two `0xc3` bytes, framed serial packets are `94 c3 len payload`, and device network/Wi-Fi config is `AdminMessage.set_config.network` over `ADMIN_APP`.
+
+## 0.1.215 - 2026-08-05
+
+- Adds UDP `TEXT_LOG` / `MESSAGES_GET` to dump the exact stored message rows with direction, DM/channel state, seen flag, from/to IDs, sender, channel, and text.
+- Extends `RX_STATUS` with recent stored message rows so receive testing can distinguish decoded-but-hidden messages from packets that never reached the message store.
+- Updates active stream/UI wording from RAK-specific labels to generic `Radio` labels for Heltec ESP32-S3 Wireless Paper testing.
+
+## 0.1.214 - 2026-08-05
+
+- Adds UDP `RX_STATUS` / `RX` to report current receive counters, last packet fields, recent stream events, and last debug packet without FTP.
+- Adds a visible inbound console-text diagnostic row when the RAK firmware reports a `TEXT_MESSAGE_APP` packet but no framed FromRadio payload reaches WiiMesh.
+- Keeps real decoded text packets on the normal message path; the diagnostic row is only for missing-payload receive debugging.
+
+## 0.1.213 - 2026-08-05
+
+- Fixes stale direct-message and header names by resolving message sender IDs against the current node table before displaying cached sender text.
+- Keeps Meshtastic short names and emoji text in badges only; node row titles now use true long names when present and fall back to IDs only while waiting for NodeInfo.
+- Prevents weak ID-style node names from overwriting a previously learned long name.
+- Adds UDP `NODE_CLEAR` / `NODES_CLEAR` / `MAP_CLEAR` to clear stale node/map cache and force fresh NodeInfo without rebuilding the DOL.
+
+## 0.1.212 - 2026-08-05
+
+- Adds direct-message MIDI sending from WiiMesh: in a direct chat, press `2` to queue the selected saved `.mid` / `.midi` file as MeshFile `[START]`, `[CHUNK]`, and `[END]` messages.
+- Keeps MIDI transfer sends direct-only; group/channel chats still do not send file chunks.
+- Adds a clean local chat marker such as `MIDI queued: file.mid` instead of dumping base64 chunks into the visible conversation.
+- Updates MeshFile send logging/status text so send chunks are not mislabeled as receipt ACKs.
+
+## 0.1.211 - 2026-08-05
+
+- Fixes the FTP deploy path so the source-tree `boot.dol` is rebuilt and uploaded instead of a stale helper copy under `tools`.
+- Adds local and remote DOL version verification during FTP deploy so `meta.xml` and the running app cannot silently drift.
+- Keeps Chat as direct-message only and Channels as the entry point for group channel chats.
+
+## 0.1.210 - 2026-08-05
+
+- Restores the intended Meshtastic naming split: short name / emoji is used for badges only, while long name is used for visible node, chat, map, and header text.
+- Treats bare 8-character hex values such as `933bf1b8` as node IDs, not display names.
+- Rolls back the map panning/recenter experiment and returns the map to node selection with the existing scrollbar/pull-bar behavior.
+
+## 0.1.209 - 2026-08-05
+
+- Adds map panning with D-pad while the map panel is focused; `+` recenters the map.
+- Keeps the map centered on the local/Wii node by default, then applies the user pan offset.
+- Draws real node badges in the map side list and map plot labels instead of showing `[icon]` text.
+- Removes raw `!nodeid` subtitle text from node cards when a long/friendly name is available.
+
+## 0.1.208 - 2026-08-05
+
+- Fixes direct-message chat rows choosing the Wii/local node as the peer, which made titles fall back to `!nodeid` instead of the remote user's long name.
+- Adds a shared direct-peer resolver for incoming/outgoing DMs so chat rows prefer the remote sender/recipient before using fallback IDs.
+- Updates the UDP `CHAT_LIST` report to use the same peer selection logic as the on-screen Chats panel.
+
+## 0.1.207 - 2026-08-05
+
+- Reworks three-emoji node badges again with an intentionally compact centered cluster instead of the old triangle layout.
+- Removes the wide top-left/top-right/bottom placement that made three-icon badges look unchanged on the Wii.
+
+## 0.1.206 - 2026-08-05
+
+- Tightens multi-emoji node badge layout so two or three emoji marks cluster together in the center of the badge instead of spreading to the badge edges.
+- Applies the compact spacing to both generated emoji icons and the older hand-drawn pixel icon fallback path.
+
+## 0.1.205 - 2026-08-05
+
+- Fixes clipped/split emoji sequence PNGs such as gendered runner, surfer, swimmer, and lifter variants.
+- Adds a headless Chrome browser-render pass for multi-codepoint emoji sequences so ZWJ, gender, flag, keycap, and skin-tone emoji are shaped like the Unicode Browser column instead of drawn as separate pieces.
+- Keeps Pillow as a fallback for machines without Chrome/Edge and for simple single-codepoint icons.
+- Writes a local repair preview to `outputs/emoji_sequence_fix_preview.png` for quick visual checks.
+
+## 0.1.204 - 2026-08-05
+
+- Removes the 512-emoji cap and compiles the full Unicode fully-qualified emoji keyboard set from Unicode's official `emoji-test.txt` feed.
+- Adds support for multi-codepoint emoji sequences in the generated atlas, including ZWJ, keycap, flag, and skin-tone sequences.
+- Generates editable PNG assets for all compiled emojis under `outputs/icons/emojis` using `emoji_u...` names.
+- Adds the generated emoji atlas to the Wii on-screen keyboard's Unicode mode so users can insert the same emoji used in node names and messages.
+
+## 0.1.203 - 2026-08-05
+
+- Expands the generated emoji atlas from the small hand-picked set to a much larger Unicode-backed set.
+- Caches Unicode's official `emoji-test.txt` feed in `outputs/icons/emojis/unicode_emoji_test_latest.txt`.
+- Compiles up to 512 single-codepoint fully-qualified Unicode emojis, then adds any extra live `U+...` emojis found in fetched Wii logs.
+- Keeps editable PNG naming as `emoji_u...` and continues to reuse edited PNGs on future builds.
+
+## 0.1.202 - 2026-08-05
+
+- Renames editable Unicode icon assets from badge-only `badge_u...` naming to general `emoji_u...` naming because the same icons can appear in usernames and messages.
+- Moves generated/editable Unicode icons to `outputs/icons/emojis`.
+- Scans fetched Wii debug logs for live Meshtastic `U+...` codepoints and auto-adds missing emoji PNGs to the build atlas.
+- Adds currently observed live codepoints including `U+2615`, `U+1F920`, and the multi-icon username sequence pieces seen in local mesh logs.
+
+## 0.1.201 - 2026-08-05
+
+- Changes the preferred editable icon folder from `outputs/ui_icons` to `outputs/icons`, with `outputs/ui_icons` kept as a fallback.
+- Adds `outputs/icons/emojis` for editable Unicode/Meshtastic emoji PNGs generated from the supported Unicode icon list.
+- Expands the compiled badge atlas to include every Unicode codepoint currently recognized by WiiMesh's node badge parser.
+- Updates build and FTPii deploy scripts to sync UI icons from `outputs/icons` first.
+
+## 0.1.200 - 2026-08-05
+
+- Adds Wii Remote pointer row clicks for the Channels screen.
+- Tapping an enabled channel such as `*LongFast` now selects it and opens the group chat, matching D-pad plus A behavior.
+- Tapping a disabled channel selects it but does not open chat.
+
+## 0.1.199 - 2026-08-05
+
+- Sanitizes node-list display names before drawing so raw icon/control-heavy name strings do not spill across cards.
+- Node cards now prefer long name, then short name, then node ID; the badge owns the short-name display so it is not repeated beside the icon.
+- Header and live-layout sample now prefer the local node friendly name for `Me:` instead of showing the raw `!nodeid` when a name is known.
+
+## 0.1.198 - 2026-08-05
+
+- Restores fallback LongFast/primary channel visibility when channel config has not decoded yet.
+- Keeps channel 0 enabled as the primary group chat instead of showing it as disabled.
+- Improves direct-message chat naming so long names from sender or known node info win before falling back to `!nodeid`.
+- Updates UDP `CHAT_LIST` naming to match the direct-message UI.
+
+## 0.1.197 - 2026-08-05
+
+- Splits direct messages away from channel conversations in the Chats screen.
+- Chats now shows direct-message conversations only and labels the panel `DIRECT MESSAGES`.
+- Channel/group conversations remain in the Channels section; selecting a channel opens that channel's chat history.
+- UDP `CHAT_LIST` now reports `DIRECT_CHAT_LIST` rows only, matching the Chats screen.
+
+## 0.1.196 - 2026-08-05
+
+- Pins unread Active Chats above quiet chats so a newly received direct message is visible immediately.
+- Makes A open the pinned unread chat instead of an older stale selected chat index.
+- Adds Wii Remote pointer row clicks for Active Chats.
+- Adds UDP `CHAT_LIST` to report the chat rows WiiMesh is building for the Active Chats screen.
+
+## 0.1.195 - 2026-08-05
+
+- Extends `USB.config` with generic vendor control transfers using `control=VID:PID,bmRequestType,bRequest,wValue,wIndex,hexData`.
+- Applies matching `control=` recipes automatically after opening a forced/configured USB serial device and again when requested from the USB tools screen.
+- Adds Settings -> USB actions for `CP210X ADD 115200` and `USB CONTROL APPLY`.
+- Adds UDP `USB_CONFIG_CP210X`, `USB_CONTROLS`, and `USB_CONFIG_SET control=...` so CP210x and other vendor-specific setup can be tested live without FTP or rebuilding.
+
+## 0.1.194 - 2026-08-05
+
+- Adds a reusable graphical pull bar on the right side of screens with hidden rows above or below the current view.
+- Pull bars show active up/down arrows for node lists, chat lists, channels, settings, USB tools, MIDI files, chat history, debug/log views, and the on-screen keyboard.
+- Wii Remote pointer clicks on pull-bar arrows now move the same selection or scroll position as the D-pad.
+- Removes old text-only `MORE` hints from graphical panels so scroll indicators do not cover messages or list rows.
+
+## 0.1.193 - 2026-08-05
+
+- Adds a Settings -> USB submenu for hardware bring-up commands on real Wii hardware.
+- USB tools can scan descriptors, try opening a serial device, add ESP32-S3 `force_cdc=303a:*`, enable one-shot bulk diagnostic mode, reset `USB.config`, reassert CDC controls, and send the Meshtastic config wake request.
+- Shows the current USB status, selected command help, `USB.config` location, and detected VID/PID/interface hints directly in the Wii UI so new Meshtastic devices can be tested without rebuilding immediately.
+
+## 0.1.192 - 2026-08-05
+
+- Adds UDP `USB_GET` and `USB_SCAN` commands that return the current USB VID/PID, class, interfaces, endpoints, diagnostics, and driver hints directly over the Wii IP command socket.
+- Adds UDP `USB_OPEN` to rescan, attempt opening the first supported/config-forced serial device, and return the USB report in the reply.
+- Adds UDP `USB_CONFIG_GET`, `USB_CONFIG_SET ...`, and `USB_CONFIG_DEFAULT` so `USB.config` can be inspected or changed live without FTPii.
+
+## 0.1.191 - 2026-08-05
+
+- Adds `SD:/apps/wii-mesh/USB.config`, created on first launch, so new USB serial candidates can be tested without rebuilding `boot.dol`.
+- Supports `force_cdc=VID:PID`, `force_cdc=VID:*`, and `try_any_bulk_cdc=1` for diagnostic CDC attempts on devices with bulk IN/OUT endpoints.
+- Updates FTPii deploy/fetch helpers to preserve and fetch `USB.config` alongside GUI and Settings configs.
+- Documents USB override rules in the README for future Heltec, ESP32-S3, and other Meshtastic hardware testing.
+
+## 0.1.190 - 2026-08-05
+
+- Adds Heltec Wireless Paper / ESP32-S3 native USB detection as a Meshtastic CDC candidate using the Espressif `303a` USB vendor family.
+- Labels `303a` devices as `heltec/esp32s3-candidate` in USB diagnostics so real-Wii testing can confirm the actual VID/PID and interface layout.
+- Labels `10c4:ea60` as `cp210x-uart-needs-driver` instead of treating it as generic unsupported USB, so CP210x-based boards are easier to identify for a later driver.
+
+## 0.1.189 - 2026-08-04
+
+- Lowers the custom rounded bitmap font by two pixels during drawing so letters are not clipped against the top edge of buttons, badges, and text fields.
+- Keeps GUI.config placement unchanged while improving text headroom across the keyboard and chat panels.
+
+## 0.1.188 - 2026-08-04
+
+- Makes incoming-message bell audio event-driven from the Meshtastic protocol parser instead of relying on draw-time message counts.
+- Allows the bell sound to fire while the screensaver is active; debug logs now record `UI bell requested` with whether the screensaver was active.
+- Keeps MeshFile MIDI autoplay independent of UI/screensaver state so completed direct-message MIDI files can start playing while the screensaver is up.
+
+## 0.1.187 - 2026-08-03
+
+- Fixes Wii Remote pointer clicks in Settings so tapping a row selects and activates it instead of only highlighting it.
+- Applies the same pointer click behavior to Screensaver, Font, and GUI Options submenus so cursor control matches D-pad plus A behavior.
+- Shares the Settings action code between pointer and button input to keep both paths in sync.
+
 ## 0.1.186 - 2026-08-03
 
 - Removes the duplicate in-chat helper bar that could cover the newest incoming message at the bottom of the chat panel.

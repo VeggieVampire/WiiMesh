@@ -18,7 +18,9 @@ public:
     const char *wakeModeName() const;
     static uint32_t wakeModeCount();
     static const char *wakeModeName(uint32_t mode);
+    void clearNodeCache(AppState &state);
     bool sendText(Transport &transport, uint32_t to, uint8_t channel, const std::string &text, bool wantAck);
+    bool sendToRadioPayload(Transport &transport, const std::vector<uint8_t> &payload, const char *label = "custom");
     void poll(Transport &transport, AppState &state);
     bool parseFromRadio(const std::vector<uint8_t> &payload, AppState &state);
 

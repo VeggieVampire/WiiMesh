@@ -6,7 +6,7 @@
 
 namespace wiimesh {
 
-constexpr const char *AppVersion = "0.1.186";
+constexpr const char *AppVersion = "0.1.221";
 constexpr uint32_t BroadcastNode = 0xffffffffu;
 constexpr int MaxMessages = 100;
 constexpr int MaxDebugPackets = 80;
@@ -151,6 +151,7 @@ struct AppState {
     std::vector<UsbDeviceInfo> usbDevices;
     std::vector<Message> messages;
     uint32_t messageRevision = 0;
+    uint32_t bellRequestSeq = 0;
     int scrollOffset = 0;
     int uiTab = 0;
     int transitionTicks = 0;
@@ -165,6 +166,11 @@ struct AppState {
     int selectedFontIndex = 0;
     int selectedGuiOptionIndex = 0;
     int selectedMidiIndex = 0;
+    uint32_t midiSendTo = 0;
+    int selectedUsbToolIndex = 0;
+    int selectedAdminToolIndex = 0;
+    int usbCommand = 0;
+    int adminCommand = 0;
     int midiCommand = 0;
     bool midiRepeat = false;
     bool midiPlaying = false;

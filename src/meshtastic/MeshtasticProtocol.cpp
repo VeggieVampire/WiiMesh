@@ -1,3 +1,4 @@
+#include "wiimesh/Clock.h"
 #include "wiimesh/MeshtasticProtocol.h"
 #include "wiimesh/ProtoReader.h"
 
@@ -72,7 +73,7 @@ static MeshFileTransfer &meshFileSlot(AppState &state, uint32_t sender, const st
     transfer.filename = filename;
     transfer.sender = sender;
     transfer.senderId = nodeId(sender);
-    transfer.started = static_cast<uint32_t>(std::time(nullptr));
+    transfer.started = currentUnixTime();
     transfer.updated = transfer.started;
     state.meshFiles.push_back(transfer);
     while (state.meshFiles.size() > 8) {
@@ -87,7 +88,7 @@ static void queueMeshFileAck(AppState &state, uint32_t to, const std::string &te
 }
 
 static bool processMeshFileText(AppState &state, uint32_t sender, const std::string &text, bool direct) {
-    const uint32_t now = static_cast<uint32_t>(std::time(nullptr));
+    const uint32_t now = currentUnixTime();
     if (!direct) {
         state.usbStatus = "MeshFile ignored";
         state.usbDetail = "Use direct chat only";
@@ -641,7 +642,7 @@ bool MeshtasticProtocol::writeWantConfig(Transport &transport, uint32_t nonce) {
     frame.insert(frame.end(), toRadio.begin(), toRadio.end());
     const bool ok = transport.write(frame.data(), frame.size()) == static_cast<int>(frame.size());
     if (ok && logger_) {
-        logger_->line("STREAM Wii -> RAK ToRadio want_config_id " + std::to_string(nonce));
+        logger_->line("STREAM Wii -> Radio ToRadio want_config_id " + std::to_string(nonce));
     }
     if (logger_) {
         logger_->line("TXRAW ToRadio want_config len " + std::to_string(static_cast<unsigned>(frame.size())) +
@@ -663,7 +664,7 @@ bool MeshtasticProtocol::sendHeartbeat(Transport &transport) {
     frame.insert(frame.end(), toRadio.begin(), toRadio.end());
     const bool ok = transport.write(frame.data(), frame.size()) == static_cast<int>(frame.size());
     if (ok && logger_) {
-        logger_->line("STREAM Wii -> RAK ToRadio heartbeat");
+        logger_->line("STREAM Wii -> Radio ToRadio heartbeat");
     }
     if (logger_) {
         logger_->line("TXRAW ToRadio heartbeat len " + std::to_string(static_cast<unsigned>(frame.size())) +
@@ -681,7 +682,7 @@ bool MeshtasticProtocol::startConfig(Transport &transport) {
     const bool wakeOk = writeWake(transport);
     const bool configOk = writeWantConfig(transport, configNonce_);
     if (logger_) {
-        logger_->line(std::string("STREAM Wii -> RAK startConfig wake ") +
+        logger_->line(std::string("STREAM Wii -> Radio startConfig wake ") +
                       std::to_string(wakeMode_) + " " + wakeModeName() +
                       (wakeOk && configOk ? " ok" : " failed"));
     }
@@ -693,13 +694,35 @@ bool MeshtasticProtocol::sendText(Transport &transport, uint32_t to, uint8_t cha
     std::vector<uint8_t> frame = buildTextToRadioFrame(to, channel, text, wantAck);
     const bool ok = transport.write(frame.data(), frame.size()) == static_cast<int>(frame.size());
     if (logger_) {
-        logger_->line(std::string("STREAM Wii -> RAK ToRadio text ") +
+        logger_->line(std::string("STREAM Wii -> Radio ToRadio text ") +
                       nodeId(to) + " ch " + std::to_string(channel) +
                       " len " + std::to_string(static_cast<unsigned>(text.size())) +
                       (ok ? " ok" : " failed"));
         logger_->line("TXRAW ToRadio text frame len " + std::to_string(static_cast<unsigned>(frame.size())) +
                       " hex " + hexPreview(frame, 48));
     }
+    return ok;
+}
+
+bool MeshtasticProtocol::sendToRadioPayload(Transport &transport, const std::vector<uint8_t> &payload,
+                                            const char *label) {
+    if (payload.size() > 512) {
+        if (logger_) logger_->line("TXRAW ToRadio custom refused len " + std::to_string(static_cast<unsigned>(payload.size())));
+        return false;
+    }
+    std::vector<uint8_t> frame = {0x94, 0xc3,
+        static_cast<uint8_t>((payload.size() >> 8) & 0xff),
+        static_cast<uint8_t>(payload.size() & 0xff)};
+    frame.insert(frame.end(), payload.begin(), payload.end());
+    const bool ok = transport.write(frame.data(), frame.size()) == static_cast<int>(frame.size());
+    if (logger_) {
+        logger_->line(std::string("STREAM Wii -> Radio ToRadio ") + (label ? label : "custom") +
+                      " payload len " + std::to_string(static_cast<unsigned>(payload.size())) +
+                      (ok ? " ok" : " failed"));
+        logger_->line("TXRAW ToRadio custom frame len " + std::to_string(static_cast<unsigned>(frame.size())) +
+                      " hex " + hexPreview(frame, 80));
+    }
+    if (ok) serialWritePause();
     return ok;
 }
 
@@ -718,7 +741,7 @@ void MeshtasticProtocol::poll(Transport &transport, AppState &state) {
         std::vector<uint8_t> chunk(buffer, buffer + n);
         const bool consoleText = looksLikeConsoleText(chunk);
         DebugPacket debug;
-        debug.time = static_cast<uint32_t>(std::time(nullptr));
+        debug.time = currentUnixTime();
         debug.title = consoleText ? "Serial Console" : "USB RX";
         debug.summary = "USB read chunk len=" + std::to_string(static_cast<unsigned>(n));
         debug.meshFields = consoleText ? "serial console/debug text" : "pre-frame raw bytes";
@@ -834,7 +857,7 @@ void MeshtasticProtocol::parseConsoleLine(const std::string &line, AppState &sta
     msg.from = from;
     msg.to = to;
     msg.channelIndex = static_cast<uint8_t>(channel & 0xff);
-    msg.rxTime = static_cast<uint32_t>(std::time(nullptr));
+    msg.rxTime = currentUnixTime();
     msg.direct = to != BroadcastNode;
     msg.senderId = nodeId(from);
     auto known = nodeNames_.find(from);
@@ -852,11 +875,21 @@ void MeshtasticProtocol::parseConsoleLine(const std::string &line, AppState &sta
     addProtocolEvent(state, logger_, std::string(consoleLooksInbound ? "console inbound" : "console outbound/local") +
                      " TEXT_MESSAGE_APP notice from " + msg.senderId +
                      " to " + toId + "; waiting for framed payload");
+    if (consoleLooksInbound) {
+        msg.text = "[TEXT notice] framed payload missing";
+        msg.seen = false;
+        state.messages.push_back(msg);
+        state.messageRevision++;
+        state.bellRequestSeq++;
+        while (static_cast<int>(state.messages.size()) > MaxMessages) {
+            state.messages.erase(state.messages.begin());
+        }
+    }
 }
 
 void MeshtasticProtocol::recordRawFrame(const std::vector<uint8_t> &payload, AppState &state) {
     DebugPacket debug;
-    debug.time = static_cast<uint32_t>(std::time(nullptr));
+    debug.time = currentUnixTime();
     debug.title = "Raw FromRadio";
     debug.summary = "FromRadio frame len=" + std::to_string(static_cast<unsigned>(payload.size()));
     debug.meshFields = "raw hex: " + hexPreview(payload, 40);
@@ -883,56 +916,56 @@ bool MeshtasticProtocol::parseFromRadio(const std::vector<uint8_t> &payload, App
             std::vector<uint8_t> nested;
             if (!r.readBytes(nested)) return false;
             if (field == 2) {
-                addStreamEvent(state, logger_, "RAK -> Wii FromRadio#" + std::to_string(fromRadioId) + " packet");
+                addStreamEvent(state, logger_, "Radio -> Wii FromRadio#" + std::to_string(fromRadioId) + " packet");
                 parsePacket(nested, state);
             }
             if (field == 3) {
-                addStreamEvent(state, logger_, "RAK -> Wii FromRadio#" + std::to_string(fromRadioId) + " my_info");
+                addStreamEvent(state, logger_, "Radio -> Wii FromRadio#" + std::to_string(fromRadioId) + " my_info");
                 parseMyInfo(nested, state);
             }
             if (field == 4) {
-                addStreamEvent(state, logger_, "RAK -> Wii FromRadio#" + std::to_string(fromRadioId) + " node_info");
+                addStreamEvent(state, logger_, "Radio -> Wii FromRadio#" + std::to_string(fromRadioId) + " node_info");
                 parseNodeInfo(nested, state);
             }
             if (field == 5) {
-                addStreamEvent(state, logger_, "RAK -> Wii FromRadio#" + std::to_string(fromRadioId) + " config");
+                addStreamEvent(state, logger_, "Radio -> Wii FromRadio#" + std::to_string(fromRadioId) + " config");
                 parseConfig(nested, state);
             }
             if (field == 6) {
-                addStreamEvent(state, logger_, "RAK -> Wii FromRadio#" + std::to_string(fromRadioId) + " log_record");
+                addStreamEvent(state, logger_, "Radio -> Wii FromRadio#" + std::to_string(fromRadioId) + " log_record");
                 parseLogRecord(nested, state);
             }
             if (field == 9) {
-                addStreamEvent(state, logger_, "RAK -> Wii FromRadio#" + std::to_string(fromRadioId) + " module_config");
+                addStreamEvent(state, logger_, "Radio -> Wii FromRadio#" + std::to_string(fromRadioId) + " module_config");
             }
             if (field == 10) {
-                addStreamEvent(state, logger_, "RAK -> Wii FromRadio#" + std::to_string(fromRadioId) + " channel");
+                addStreamEvent(state, logger_, "Radio -> Wii FromRadio#" + std::to_string(fromRadioId) + " channel");
                 parseChannel(nested, state);
             }
             if (field == 11) {
-                addStreamEvent(state, logger_, "RAK -> Wii FromRadio#" + std::to_string(fromRadioId) + " queue_status");
+                addStreamEvent(state, logger_, "Radio -> Wii FromRadio#" + std::to_string(fromRadioId) + " queue_status");
             }
             if (field == 13) {
-                addStreamEvent(state, logger_, "RAK -> Wii FromRadio#" + std::to_string(fromRadioId) + " metadata");
+                addStreamEvent(state, logger_, "Radio -> Wii FromRadio#" + std::to_string(fromRadioId) + " metadata");
                 parseMetadata(nested, state);
             }
             if (field == 16) {
-                addStreamEvent(state, logger_, "RAK -> Wii FromRadio#" + std::to_string(fromRadioId) + " client_notification");
+                addStreamEvent(state, logger_, "Radio -> Wii FromRadio#" + std::to_string(fromRadioId) + " client_notification");
             }
         } else if (wire == 0 && field == 7) {
             uint64_t id = 0;
             r.readVarint(id);
             state.protocolReady = true;
-            addStreamEvent(state, logger_, "RAK -> Wii FromRadio#" + std::to_string(fromRadioId) +
+            addStreamEvent(state, logger_, "Radio -> Wii FromRadio#" + std::to_string(fromRadioId) +
                            " config_complete " + std::to_string(static_cast<unsigned>(id)));
             addProtocolEvent(state, logger_, "config complete id " + std::to_string(static_cast<unsigned>(id)));
         } else {
-            addStreamEvent(state, logger_, "RAK -> Wii FromRadio#" + std::to_string(fromRadioId) +
+            addStreamEvent(state, logger_, "Radio -> Wii FromRadio#" + std::to_string(fromRadioId) +
                            " field " + std::to_string(field) + " wire " + std::to_string(wire));
             if (!r.skip(wire)) {
                 addProtocolEvent(state, logger_, "fromRadio skip failed field " + std::to_string(field) +
                                                " wire " + std::to_string(wire));
-                addStreamEvent(state, logger_, "RAK -> Wii malformed FromRadio field " +
+                addStreamEvent(state, logger_, "Radio -> Wii malformed FromRadio field " +
                                std::to_string(field) + " wire " + std::to_string(wire) +
                                " len " + std::to_string(static_cast<unsigned>(payload.size())));
                 addStreamEvent(state, logger_, "payload hex " + hexPreview(payload, 24));
@@ -1010,7 +1043,7 @@ void MeshtasticProtocol::parseLogRecord(const std::vector<uint8_t> &payload, App
     addStreamEvent(state, logger_, line);
 
     DebugPacket debug;
-    debug.time = static_cast<uint32_t>(std::time(nullptr));
+    debug.time = currentUnixTime();
     debug.title = "LogRecord";
     debug.summary = line;
     debug.meshFields = "FromRadio.log_record";
@@ -1039,7 +1072,7 @@ void MeshtasticProtocol::parseMetadata(const std::vector<uint8_t> &payload, AppS
     addStreamEvent(state, logger_, summary);
 
     DebugPacket debug;
-    debug.time = static_cast<uint32_t>(std::time(nullptr));
+    debug.time = currentUnixTime();
     debug.title = "Metadata";
     debug.summary = summary;
     debug.meshFields = "FromRadio.metadata";
@@ -1067,13 +1100,28 @@ std::string hardwareModelName(uint32_t model) {
     return "MODEL " + std::to_string(model);
 }
 
+bool looksLikeNodeIdLabel(const std::string &text) {
+    const size_t start = (!text.empty() && text[0] == '!') ? 1 : 0;
+    if (text.size() - start != 8) return false;
+    for (size_t i = start; i < text.size(); ++i) {
+        if (!std::isxdigit(static_cast<unsigned char>(text[i]))) return false;
+    }
+    return true;
+}
+
+bool usefulLongName(uint32_t node, const std::string &name) {
+    if (name.empty()) return false;
+    if (name == nodeId(node) || looksLikeNodeIdLabel(name)) return false;
+    return true;
+}
+
 void MeshtasticProtocol::updateKnownNodes(AppState &state) {
     state.knownNodes.clear();
     for (const auto &entry : nodeNames_) {
         NodeSummary node;
         node.id = entry.first;
         node.nodeId = nodeId(entry.first);
-        node.name = entry.second.empty() ? node.nodeId : entry.second;
+        node.name = usefulLongName(entry.first, entry.second) ? entry.second : "";
         auto shortEntry = nodeShortNames_.find(entry.first);
         node.shortName = shortEntry == nodeShortNames_.end() ? "" : shortEntry->second;
         auto macEntry = nodeMacAddresses_.find(entry.first);
@@ -1119,6 +1167,31 @@ void MeshtasticProtocol::updateKnownNodes(AppState &state) {
             return a.id < b.id;
         });
     state.nodeCount = static_cast<uint32_t>(state.knownNodes.size());
+}
+
+void MeshtasticProtocol::clearNodeCache(AppState &state) {
+    nodeNames_.clear();
+    nodeShortNames_.clear();
+    nodeMacAddresses_.clear();
+    nodeHardwareModels_.clear();
+    nodeLastHeard_.clear();
+    nodeHopsAway_.clear();
+    nodeSnr_.clear();
+    nodeBatteryLevels_.clear();
+    nodeVoltages_.clear();
+    nodeLatitudes_.clear();
+    nodeLongitudes_.clear();
+    nodeAltitudes_.clear();
+    nodePositionTimes_.clear();
+    nodePrecisionBits_.clear();
+    state.knownNodes.clear();
+    state.nodeCount = 0;
+    state.onlineNodeCount = 0;
+    state.totalNodeCount = 0;
+    if (myNode_ != 0) {
+        state.myNodeId = nodeId(myNode_);
+        state.nodeName = state.myNodeId;
+    }
 }
 
 bool MeshtasticProtocol::parsePosition(uint32_t node, const std::vector<uint8_t> &payload, AppState &state) {
@@ -1239,7 +1312,7 @@ void MeshtasticProtocol::parseNodeInfo(const std::vector<uint8_t> &payload, AppS
                 }
                 else u.skip(uw);
             }
-            name = !longName.empty() ? longName : (!shortName.empty() ? shortName : id);
+            name = longName;
         } else if (field == 3 && wire == 2) {
             r.readBytes(position);
         } else if (field == 4 && wire == 5) {
@@ -1274,10 +1347,14 @@ void MeshtasticProtocol::parseNodeInfo(const std::vector<uint8_t> &payload, AppS
             r.skip(wire);
         }
     }
-    if (num != 0 && !name.empty()) {
+    if (num != 0) {
         const bool wasNew = nodeNames_.find(num) == nodeNames_.end();
-        nodeNames_[num] = name;
-        nodeShortNames_[num] = shortName;
+        if (usefulLongName(num, name)) {
+            nodeNames_[num] = name;
+        } else if (wasNew) {
+            nodeNames_[num] = nodeId(num);
+        }
+        if (!shortName.empty()) nodeShortNames_[num] = shortName;
         if (!macAddress.empty()) nodeMacAddresses_[num] = macAddress;
         if (hardwareModel != 0) nodeHardwareModels_[num] = hardwareModel;
         if (lastHeard != 0) nodeLastHeard_[num] = lastHeard;
@@ -1286,15 +1363,17 @@ void MeshtasticProtocol::parseNodeInfo(const std::vector<uint8_t> &payload, AppS
         if (batteryLevel >= 0) nodeBatteryLevels_[num] = batteryLevel;
         if (voltage > 0.0f) nodeVoltages_[num] = voltage;
         if (!position.empty() && parsePosition(num, position, state)) {
-            addStreamEvent(state, logger_, "RAK -> Wii node position " + nodeId(num));
+            addStreamEvent(state, logger_, "Radio -> Wii node position " + nodeId(num));
         }
         updateKnownNodes(state);
         if (num == myNode_) {
-            state.nodeName = name;
+            const auto self = nodeNames_.find(num);
+            state.nodeName = (self == nodeNames_.end() || !usefulLongName(num, self->second)) ? nodeId(num) : self->second;
             state.myNodeId = nodeId(num);
         }
         if (wasNew || num == myNode_) {
-            addProtocolEvent(state, logger_, "node " + nodeId(num) + " " + name +
+            const std::string loggedName = usefulLongName(num, name) ? name : nodeId(num);
+            addProtocolEvent(state, logger_, "node " + nodeId(num) + " " + loggedName +
                              " short " + shortName + " utf8 long " + utf8CodepointSummary(name) +
                              " short " + utf8CodepointSummary(shortName) +
                              " hw " + hardwareModelName(hardwareModel) +
@@ -1412,7 +1491,7 @@ void MeshtasticProtocol::parseChannel(const std::vector<uint8_t> &payload, AppSt
 void MeshtasticProtocol::parsePacket(const std::vector<uint8_t> &payload, AppState &state) {
     Message msg;
     msg.to = BroadcastNode;
-    msg.rxTime = static_cast<uint32_t>(std::time(nullptr));
+    msg.rxTime = currentUnixTime();
 
     std::vector<uint8_t> decoded;
     bool hasDecoded = false;
@@ -1516,7 +1595,7 @@ void MeshtasticProtocol::parsePacket(const std::vector<uint8_t> &payload, AppSta
     if (port == PortPosition) {
         if (parsePosition(msg.from, dataPayload, state)) {
             addProtocolEvent(state, logger_, "position packet from " + nodeId(msg.from));
-            addStreamEvent(state, logger_, "RAK -> Wii POSITION_APP map point " + nodeId(msg.from));
+            addStreamEvent(state, logger_, "Radio -> Wii POSITION_APP map point " + nodeId(msg.from));
         } else {
             addProtocolEvent(state, logger_, "position packet without usable lat/lon from " + nodeId(msg.from));
         }
@@ -1556,6 +1635,7 @@ void MeshtasticProtocol::parsePacket(const std::vector<uint8_t> &payload, AppSta
     const bool meshFileText = meshFileCommand && processMeshFileText(state, msg.from, msg.text, msg.direct);
     state.messages.push_back(msg);
     state.messageRevision++;
+    state.bellRequestSeq++;
     state.textMessageCount++;
     addProtocolEvent(state, logger_, std::string(meshFileText ? "meshfile " : (msg.direct ? "direct text " : "channel text ")) +
                      msg.senderName + ": " + msg.text.substr(0, 40));

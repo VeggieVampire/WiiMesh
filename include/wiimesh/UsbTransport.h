@@ -17,6 +17,7 @@ public:
     int write(const uint8_t *buffer, size_t size) override;
     void setWriteMatrixEnabled(bool enabled);
     bool reassertCdcControl();
+    bool applyConfiguredUsbControls();
     const std::string &lastError() const;
 
 private:
@@ -30,6 +31,8 @@ private:
     uint8_t configurationValue_ = 0;
     int controlInterface_ = 0;
     int32_t deviceId_ = -1;
+    uint16_t vendorId_ = 0;
+    uint16_t productId_ = 0;
     bool readPending_ = false;
     bool readComplete_ = false;
     int readResult_ = 0;

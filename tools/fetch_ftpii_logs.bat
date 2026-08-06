@@ -103,6 +103,15 @@ if errorlevel 1 (
   echo Saved "%OUT_DIR%Settings.config"
 )
 
+curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/USB.config" -o "%OUT_DIR%USB.config" >> "%FETCH_LOG%" 2>&1
+if errorlevel 1 curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/usb.config" -o "%OUT_DIR%USB.config" >> "%FETCH_LOG%" 2>&1
+if errorlevel 1 (
+  >> "%FETCH_LOG%" echo No USB.config fetched.
+  if exist "%OUT_DIR%USB.config" del "%OUT_DIR%USB.config" >nul 2>nul
+) else (
+  echo Saved "%OUT_DIR%USB.config"
+)
+
 curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/mesh_map.dat" -o "%OUT_DIR%mesh_map.dat" >> "%FETCH_LOG%" 2>&1
 if errorlevel 1 curl %CURL_GET% --fail "%FTP_URL%%WII_DEVICE%/apps/%APP_SLUG%/MESH_MAP.DAT" -o "%OUT_DIR%mesh_map.dat" >> "%FETCH_LOG%" 2>&1
 if errorlevel 1 (

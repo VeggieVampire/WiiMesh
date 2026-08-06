@@ -22,6 +22,50 @@ As of `v0.1.51`, the known-good real-hardware path is direct-message receive fro
 
 Other Meshtastic USB devices and serial chipsets are not confirmed yet. They should be treated as diagnostic targets until their Wii USB descriptors and setup requirements are captured.
 
+## USB Device Overrides
+
+WiiMesh creates this file on first launch:
+
+```text
+SD:/apps/wii-mesh/USB.config
+```
+
+Standard USB CDC ACM devices are tried automatically from their USB descriptors. For future Meshtastic boards that show bulk IN/OUT endpoints but are not standard CDC, edit `USB.config` instead of rebuilding `boot.dol`:
+
+```text
+# Try one exact device as CDC:
+force_cdc=303a:1001
+
+# Try any product under one vendor, useful for ESP32-S3 tests:
+force_cdc=303a:*
+
+# Last-resort diagnostic mode. Use briefly only:
+try_any_bulk_cdc=1
+
+# Generic USB control transfer:
+# control=VID:PID,bmRequestType,bRequest,wValue,wIndex,hexData
+
+# CP210x 115200 8N1 + DTR/RTS example:
+force_cdc=10c4:ea60
+control=10c4:ea60,0x41,0x00,0x0001,0x0000,
+control=10c4:ea60,0x41,0x07,0x0303,0x0000,
+control=10c4:ea60,0x41,0x03,0x0800,0x0000,
+control=10c4:ea60,0x41,0x1e,0x0000,0x0000,00c20100
+```
+
+`try_any_bulk_cdc=1` can grab non-serial USB devices, so turn it back off after collecting diagnostics. If WiiMesh reports `cp210x-uart-needs-driver`, the board is not native CDC and needs a CP210x driver rather than a config-only override.
+
+The same setup helpers are available on the Wii under **Settings -> USB**. That screen can scan USB devices, try opening the current candidate, add common ESP32-S3 override rules, add the CP210x 115200 recipe, apply configured USB control transfers, briefly enable bulk diagnostic mode, reset `USB.config`, reassert CDC line controls, and resend the Meshtastic config wake command.
+
+With Wii IP/UDP enabled, the same operations can be done without FTPii:
+
+```bat
+py outputs\send_udp_command.py 192.168.0.42 "USB_CONFIG_CP210X"
+py outputs\send_udp_command.py 192.168.0.42 "USB_OPEN"
+py outputs\send_udp_command.py 192.168.0.42 "USB_CONTROLS"
+py outputs\send_udp_command.py 192.168.0.42 "CFG"
+```
+
 ## Features
 
 - Produces `boot.dol` with devkitPPC/libogc.
@@ -41,6 +85,17 @@ Other Meshtastic USB devices and serial chipsets are not confirmed yet. They sho
 - Saves the last 100 messages to `SD:/apps/wii-mesh/messages.dat`.
 - Saves diagnostics to `SD:/apps/wii-mesh/debug.log`.
 - Handles unplug/reconnect by returning to enumeration and reopening supported serial devices.
+
+## Editable Icons
+
+WiiMesh uses `outputs/icons` as the main editable icon folder during local builds and FTPii deploys.
+
+- Dashboard/UI icons live at the top level: `home.png`, `node.png`, `channels.png`, `chat.png`, `map.png`, `settings.png`, and `bell.png`.
+- Meshtastic emoji icons live in `outputs/icons/emojis` and are named by Unicode codepoint, for example `emoji_u1f514_bell.png`.
+- Emoji PNGs are generated from the Windows emoji/symbol font when missing, then reused on future builds so edited files stay editable.
+- The generator caches Unicode's official `emoji-test.txt` list and compiles a broad single-codepoint emoji atlas before adding live mesh-log codepoints.
+- The emoji generator also scans fetched Wii logs for live `U+...` codepoints from Meshtastic usernames/messages and adds missing editable `emoji_u...` files automatically.
+- The older `outputs/ui_icons` folder is still supported as a fallback, but new edits should go in `outputs/icons`.
 
 ## Build
 

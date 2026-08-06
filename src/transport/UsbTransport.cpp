@@ -1,8 +1,12 @@
 #include "wiimesh/UsbTransport.h"
 
 #include <cstdio>
+#include <cstdlib>
+#include <cctype>
 #include <cstring>
 #include <map>
+#include <string>
+#include <vector>
 
 #if defined(WIIMESH_WII)
 #include <gccore.h>
@@ -11,6 +15,172 @@
 #endif
 
 namespace wiimesh {
+
+namespace {
+
+constexpr const char *UsbConfigPath = "sd:/apps/wii-mesh/USB.config";
+
+struct UsbIdRule {
+    int vendor = -1;
+    int product = -1;
+};
+
+struct UsbRuntimeConfig {
+    bool tryAnyBulkCdc = false;
+    std::vector<UsbIdRule> forceCdc;
+    struct ControlRule {
+        UsbIdRule id;
+        uint8_t requestType = 0;
+        uint8_t request = 0;
+        uint16_t value = 0;
+        uint16_t index = 0;
+        std::vector<uint8_t> data;
+    };
+    std::vector<ControlRule> controls;
+};
+
+static std::string trimUsbLine(std::string out) {
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r' ||
+                            out.back() == ' ' || out.back() == '\t')) {
+        out.pop_back();
+    }
+    while (!out.empty() && (out.front() == ' ' || out.front() == '\t')) {
+        out.erase(out.begin());
+    }
+    return out;
+}
+
+static int parseUsbHexPart(const std::string &text) {
+    std::string s = trimUsbLine(text);
+    if (s.empty() || s == "*") return -1;
+    if (s.size() > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        s = s.substr(2);
+    }
+    return static_cast<int>(std::strtol(s.c_str(), nullptr, 16));
+}
+
+static bool parseUsbIdRule(const std::string &value, UsbIdRule &rule) {
+    const size_t colon = value.find(':');
+    if (colon == std::string::npos) return false;
+    rule.vendor = parseUsbHexPart(value.substr(0, colon));
+    rule.product = parseUsbHexPart(value.substr(colon + 1));
+    return rule.vendor >= 0;
+}
+
+static std::vector<std::string> splitUsbCsv(const std::string &value) {
+    std::vector<std::string> out;
+    size_t start = 0;
+    while (start <= value.size()) {
+        const size_t comma = value.find(',', start);
+        if (comma == std::string::npos) {
+            out.push_back(trimUsbLine(value.substr(start)));
+            break;
+        }
+        out.push_back(trimUsbLine(value.substr(start, comma - start)));
+        start = comma + 1;
+    }
+    return out;
+}
+
+static int parseUsbNumber(const std::string &text) {
+    std::string s = trimUsbLine(text);
+    if (s.empty()) return 0;
+    int base = 10;
+    if (s.size() > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        base = 16;
+    }
+    return static_cast<int>(std::strtol(s.c_str(), nullptr, base));
+}
+
+static bool parseHexBytes(const std::string &text, std::vector<uint8_t> &out) {
+    std::string s;
+    for (char c : text) {
+        if (std::isxdigit(static_cast<unsigned char>(c))) s.push_back(c);
+    }
+    if (s.empty()) return true;
+    if ((s.size() % 2) != 0) return false;
+    for (size_t i = 0; i < s.size(); i += 2) {
+        out.push_back(static_cast<uint8_t>(std::strtol(s.substr(i, 2).c_str(), nullptr, 16)));
+    }
+    return true;
+}
+
+static bool parseUsbControlRule(const std::string &value, UsbRuntimeConfig::ControlRule &rule) {
+    const std::vector<std::string> parts = splitUsbCsv(value);
+    if (parts.size() < 5) return false;
+    if (!parseUsbIdRule(parts[0], rule.id)) return false;
+    rule.requestType = static_cast<uint8_t>(parseUsbNumber(parts[1]) & 0xff);
+    rule.request = static_cast<uint8_t>(parseUsbNumber(parts[2]) & 0xff);
+    rule.value = static_cast<uint16_t>(parseUsbNumber(parts[3]) & 0xffff);
+    rule.index = static_cast<uint16_t>(parseUsbNumber(parts[4]) & 0xffff);
+    rule.data.clear();
+    if (parts.size() >= 6 && !parseHexBytes(parts[5], rule.data)) return false;
+    return true;
+}
+
+static bool usbBoolValue(const std::string &value) {
+    return value == "1" || value == "on" || value == "ON" || value == "true" ||
+           value == "TRUE" || value == "yes" || value == "YES";
+}
+
+static UsbRuntimeConfig loadUsbRuntimeConfig() {
+    UsbRuntimeConfig cfg;
+    FILE *f = std::fopen(UsbConfigPath, "rb");
+    if (!f) return cfg;
+    char raw[160] = {};
+    while (std::fgets(raw, sizeof(raw), f)) {
+        std::string line = trimUsbLine(raw);
+        if (line.empty() || line[0] == '#') continue;
+        const size_t comment = line.find('#');
+        if (comment != std::string::npos) line = trimUsbLine(line.substr(0, comment));
+        const size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        const std::string key = trimUsbLine(line.substr(0, eq));
+        const std::string value = trimUsbLine(line.substr(eq + 1));
+        if (key == "try_any_bulk_cdc" || key == "try_bulk_cdc") {
+            cfg.tryAnyBulkCdc = usbBoolValue(value);
+        } else if (key == "force_cdc" || key == "cdc") {
+            UsbIdRule rule;
+            if (parseUsbIdRule(value, rule)) cfg.forceCdc.push_back(rule);
+        } else if (key == "control" || key == "usb_control") {
+            UsbRuntimeConfig::ControlRule rule;
+            if (parseUsbControlRule(value, rule)) cfg.controls.push_back(rule);
+        }
+    }
+    std::fclose(f);
+    return cfg;
+}
+
+static bool ruleMatches(const UsbIdRule &rule, const UsbDeviceInfo &info) {
+    if (rule.vendor >= 0 && static_cast<uint16_t>(rule.vendor) != info.vendorId) return false;
+    if (rule.product >= 0 && static_cast<uint16_t>(rule.product) != info.productId) return false;
+    return true;
+}
+
+static bool hasBulkInOut(const UsbDeviceInfo &info) {
+    bool bulkIn = false;
+    bool bulkOut = false;
+    for (const auto &iface : info.interfaces) {
+        for (const auto &ep : iface.endpoints) {
+            if ((ep.attributes & 0x03) == 0x02) {
+                bulkIn = bulkIn || ((ep.address & 0x80) != 0);
+                bulkOut = bulkOut || ((ep.address & 0x80) == 0);
+            }
+        }
+    }
+    return bulkIn && bulkOut;
+}
+
+static bool usbConfigForcesCdc(const UsbDeviceInfo &info, bool requireBulk = true) {
+    const UsbRuntimeConfig cfg = loadUsbRuntimeConfig();
+    if (requireBulk && !hasBulkInOut(info)) return false;
+    for (const UsbIdRule &rule : cfg.forceCdc) {
+        if (ruleMatches(rule, info)) return true;
+    }
+    return cfg.tryAnyBulkCdc;
+}
+
+}
 
 UsbTransport::UsbTransport(Logger *logger) : logger_(logger) {
 #if defined(WIIMESH_WII)
@@ -22,9 +192,28 @@ UsbTransport::~UsbTransport() {
     close();
 }
 
+static bool knownMeshtasticCdcCandidate(const UsbDeviceInfo &info) {
+    return info.vendorId == 0x239a || // Adafruit/TinyUSB UF2 CDC family, seen on RAK4631 Meshtastic
+           info.vendorId == 0x1915 || // Nordic Semiconductor nRF52840 native USB
+           info.vendorId == 0x2e8a || // Raspberry Pi RP2040 family, useful for future USB serial boards
+           info.vendorId == 0x303a;   // Espressif ESP32-S3 native USB CDC/JTAG family, used by Heltec boards
+}
+
 static std::string classHint(const UsbDeviceInfo &info) {
-    if (info.vendorId == 0x239a || info.vendorId == 0x1915 || info.vendorId == 0x2e8a) {
+    if (usbConfigForcesCdc(info, false)) {
+        return hasBulkInOut(info) ? "config-force-cdc" : "config-cdc-no-bulk";
+    }
+    if (info.vendorId == 0x239a || info.vendorId == 0x1915) {
         return "rak/nrf52840-candidate";
+    }
+    if (info.vendorId == 0x303a) {
+        return "heltec/esp32s3-candidate";
+    }
+    if (info.vendorId == 0x2e8a) {
+        return "rp2040-cdc-candidate";
+    }
+    if (info.vendorId == 0x10c4 && info.productId == 0xea60) {
+        return "cp210x-uart-needs-driver";
     }
     for (const auto &iface : info.interfaces) {
         if (iface.klass == 0x02 || iface.klass == 0x0a) {
@@ -35,12 +224,6 @@ static std::string classHint(const UsbDeviceInfo &info) {
         }
     }
     return "unsupported";
-}
-
-static bool knownNrfCdcCandidate(const UsbDeviceInfo &info) {
-    return info.vendorId == 0x239a || // Adafruit/TinyUSB UF2 CDC family
-           info.vendorId == 0x1915 || // Nordic Semiconductor
-           info.vendorId == 0x2e8a;   // Raspberry Pi RP2040 family, useful for future USB serial boards
 }
 
 #if defined(WIIMESH_WII)
@@ -101,7 +284,7 @@ void UsbTransport::pollDevices(std::vector<UsbDeviceInfo> &devices) {
 
         s32 fd = -1;
         if (USB_OpenDevice(usb.device_id, usb.vid, usb.pid, &fd) < 0) {
-            out.driverHint = knownNrfCdcCandidate(out) ? "rak/nrf-open-failed" : "open-failed";
+            out.driverHint = knownMeshtasticCdcCandidate(out) ? "meshtastic-cdc-open-failed" : "open-failed";
             out.diagnostic = "USB_OpenDevice failed";
             devices.push_back(out);
             if (logger_) logger_->line("USB_OpenDevice failed for " + hex16(out.vendorId) + ":" + hex16(out.productId));
@@ -138,7 +321,7 @@ void UsbTransport::pollDevices(std::vector<UsbDeviceInfo> &devices) {
             USB_FreeDescriptors(&desc);
             out.diagnostic = "descriptors ok";
         } else {
-            out.driverHint = knownNrfCdcCandidate(out) ? "rak/nrf-desc-failed" : "descriptor-failed";
+            out.driverHint = knownMeshtasticCdcCandidate(out) ? "meshtastic-cdc-desc-failed" : "descriptor-failed";
             out.diagnostic = "USB_GetDescriptors failed";
             usb_devdesc basic;
             std::memset(&basic, 0, sizeof(basic));
@@ -176,7 +359,8 @@ bool UsbTransport::isCdcAcm(const UsbDeviceInfo &info) const {
         }
     }
     return (control && data) ||
-           (knownNrfCdcCandidate(info) && data && bulkIn && bulkOut);
+           usbConfigForcesCdc(info) ||
+           (knownMeshtasticCdcCandidate(info) && data && bulkIn && bulkOut);
 }
 
 bool UsbTransport::openFirstSupported(const std::vector<UsbDeviceInfo> &devices) {
@@ -252,11 +436,14 @@ bool UsbTransport::openFirstSupported(const std::vector<UsbDeviceInfo> &devices)
         fd_ = fd;
         open_ = true;
         deviceId_ = dev.deviceId;
+        vendorId_ = dev.vendorId;
+        productId_ = dev.productId;
         configurationValue_ = dev.configurationValue;
+        const bool controlsOk = applyConfiguredUsbControls();
         char detail[128];
-        std::snprintf(detail, sizeof(detail), "cdc fd %ld if %u ep out %02x in %02x cfg %ld alt %ld",
+        std::snprintf(detail, sizeof(detail), "serial fd %ld if %u ep out %02x in %02x cfg %ld alt %ld ctrl %s",
                       static_cast<long>(fd_), dataInterface_, bulkOut_, bulkIn_, static_cast<long>(setCfg),
-                      static_cast<long>(setAlt));
+                      static_cast<long>(setAlt), controlsOk ? "ok" : "none/fail");
         lastError_ = detail;
         if (logger_) logger_->line("Opened CDC ACM device " + hex16(dev.vendorId) + ":" + hex16(dev.productId));
         return true;
@@ -282,6 +469,8 @@ void UsbTransport::close() {
     configurationValue_ = 0;
     controlInterface_ = 0;
     deviceId_ = -1;
+    vendorId_ = 0;
+    productId_ = 0;
     readPending_ = false;
     readComplete_ = false;
     readResult_ = 0;
@@ -603,6 +792,47 @@ int UsbTransport::writeCallback(int result, void *userdata) {
     return 0;
 }
 
+bool UsbTransport::applyConfiguredUsbControls() {
+#if defined(WIIMESH_WII)
+    if (!open_) {
+        lastError_ = "USB controls failed: fd closed";
+        return false;
+    }
+    const UsbRuntimeConfig cfg = loadUsbRuntimeConfig();
+    int applied = 0;
+    int failed = 0;
+    for (const auto &rule : cfg.controls) {
+        UsbDeviceInfo current;
+        current.vendorId = vendorId_;
+        current.productId = productId_;
+        if (!ruleMatches(rule.id, current)) continue;
+        alignas(32) uint8_t data[64] = {};
+        const u16 len = static_cast<u16>(std::min<size_t>(rule.data.size(), sizeof(data)));
+        if (len > 0) {
+            std::memcpy(data, rule.data.data(), len);
+            DCFlushRange(data, len);
+        }
+        s32 ret = USB_WriteCtrlMsg(fd_, rule.requestType, rule.request, rule.value, rule.index,
+                                   len, len > 0 ? data : nullptr);
+        char line[192];
+        std::snprintf(line, sizeof(line),
+                      "USB config control %04x:%04x bm %02x req %02x value %04x index %04x len %u ret %ld",
+                      vendorId_, productId_, rule.requestType, rule.request,
+                      rule.value, rule.index, static_cast<unsigned>(len), static_cast<long>(ret));
+        if (logger_) logger_->line(line);
+        if (ret < 0) ++failed;
+        else ++applied;
+    }
+    char detail[96];
+    std::snprintf(detail, sizeof(detail), "USB controls applied %d failed %d", applied, failed);
+    lastError_ = detail;
+    return applied > 0 && failed == 0;
+#else
+    lastError_ = "USB controls unavailable on host";
+    return false;
+#endif
+}
+
 bool UsbTransport::reassertCdcControl() {
 #if defined(WIIMESH_WII)
     if (!open_) {
@@ -617,14 +847,15 @@ bool UsbTransport::reassertCdcControl() {
                               sizeof(lineCoding), lineCoding);
     s32 dtr = USB_WriteCtrlMsg(fd_, 0x21, 0x22, 0x0003, static_cast<u16>(controlInterface_),
                                0, nullptr);
+    const bool controls = applyConfiguredUsbControls();
     char line[160];
-    std::snprintf(line, sizeof(line), "cdc reassert if %u ctrl %d alt %ld clear %02x/%ld %02x/%ld line %ld dtr %ld",
+    std::snprintf(line, sizeof(line), "cdc reassert if %u ctrl %d alt %ld clear %02x/%ld %02x/%ld line %ld dtr %ld cfgctl %d",
                   dataInterface_, controlInterface_, static_cast<long>(alt),
                   bulkIn_, static_cast<long>(clearIn), bulkOut_, static_cast<long>(clearOut),
-                  static_cast<long>(lc), static_cast<long>(dtr));
+                  static_cast<long>(lc), static_cast<long>(dtr), controls ? 1 : 0);
     lastError_ = line;
     if (logger_) logger_->line(lastError_);
-    return lc >= 0 && dtr >= 0;
+    return (lc >= 0 && dtr >= 0) || controls;
 #else
     lastError_ = "CDC reassert unavailable on host";
     return false;
